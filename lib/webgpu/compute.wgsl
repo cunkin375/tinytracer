@@ -194,7 +194,7 @@ fn set_face_normal(r: Ray, outward_normal: vec3<f32>, rec: ptr<function, HitReco
 
 
 fn hit_aabb(r: Ray, t_min: f32, t_max: f32, aabb_min: vec3<f32>, aabb_max: vec3<f32>) -> bool {
-    var invD = 1.0 / r.direction;
+    var invD = vec3<f32>(1.0) / r.direction;
     var t0s = (aabb_min - r.origin) * invD;
     var t1s = (aabb_max - r.origin) * invD;
     

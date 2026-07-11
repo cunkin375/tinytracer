@@ -177,6 +177,12 @@ export class WebGPUPathTracer {
           visibility: GPUShaderStage.COMPUTE,
           buffer: { type: "read-only-storage" },
         },
+        {
+          // @binding(5): BVH storage (read-only)
+          binding: 5,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "read-only-storage" },
+        },
       ],
     });
 
