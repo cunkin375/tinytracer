@@ -17,7 +17,9 @@ export const PYRAMID_CONFIGS = [
   },
 ];
 
-export const ORTHO_FRUSTUM_SIZE = 8;
+// Sized to frame the central Earth sphere (radius 15, plus the trees poking
+// out of its surface) with a little margin in orthographic mode.
+export const ORTHO_FRUSTUM_SIZE = 40;
 
 /** Initial tree count shown in the main app, and the tree-count slider's starting value. */
 export const DEFAULT_TREE_COUNT = 15;

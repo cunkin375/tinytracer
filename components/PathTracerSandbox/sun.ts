@@ -33,4 +33,15 @@ export function applySunSettings(
   light.target.position.set(0, 0, 0);
   light.color.set(sun.color);
   light.intensity = sun.intensity;
+
+  // Keep the visible sun proxy (a child mesh, see useThreeScene) tinted to
+  // match the light's colour.
+  light.traverse((child) => {
+    if (
+      child instanceof THREE.Mesh &&
+      child.material instanceof THREE.MeshBasicMaterial
+    ) {
+      child.material.color.set(sun.color);
+    }
+  });
 }
