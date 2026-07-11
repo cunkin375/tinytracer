@@ -13,7 +13,7 @@ export function TopBar({
           <div
             className="w-8 h-8 rounded-lg flex items-center justify-center"
             style={{
-              background: "linear-gradient(135deg, #6366f1 0%, #a855f7 100%)",
+              background: "linear-gradient(135deg, #74c311 0%, #235338 100%)",
             }}
           >
             <svg
@@ -52,12 +52,12 @@ export function TopBar({
             disabled:opacity-50 disabled:cursor-not-allowed"
           style={{
             background: isTracing
-              ? "rgba(99, 102, 241, 0.3)"
-              : "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
+              ? "rgba(116, 195, 17, 0.25)"
+              : "linear-gradient(135deg, #74c311 0%, #235338 100%)",
             color: "white",
             boxShadow: isTracing
               ? "none"
-              : "0 0 20px rgba(99, 102, 241, 0.3), 0 4px 12px rgba(0,0,0,0.3)",
+              : "0 0 20px rgba(116, 195, 17, 0.35), 0 4px 12px rgba(0,0,0,0.3)",
           }}
         >
           {isTracing ? "Tracing…" : "▶ Run Path Tracer"}

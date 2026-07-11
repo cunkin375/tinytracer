@@ -14,15 +14,15 @@ export function TracingOverlay() {
         <div
           className="w-16 h-16 rounded-full"
           style={{
-            border: "2px solid rgba(99, 102, 241, 0.2)",
-            borderTopColor: "#6366f1",
+            border: "2px solid rgba(116, 195, 17, 0.2)",
+            borderTopColor: "#74c311",
             animation: "spin-slow 1s linear infinite",
           }}
         />
         <div
           className="absolute inset-0 w-16 h-16 rounded-full"
           style={{
-            border: "2px solid rgba(99, 102, 241, 0.15)",
+            border: "2px solid rgba(116, 195, 17, 0.15)",
             animation: "pulse-ring 1.5s ease-out infinite",
           }}
         />
@@ -43,7 +43,7 @@ export function TracingOverlay() {
           <div
             className="h-full rounded-full"
             style={{
-              background: "linear-gradient(90deg, #6366f1 0%, #a855f7 100%)",
+              background: "linear-gradient(90deg, #74c311 0%, #8cb4d9 100%)",
               animation: "indeterminate 1.5s ease-in-out infinite",
               width: "40%",
             }}

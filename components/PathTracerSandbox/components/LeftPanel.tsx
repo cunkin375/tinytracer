@@ -21,7 +21,7 @@ export function LeftPanel({
         style={{
           background: "rgba(18, 18, 26, 0.85)",
           backdropFilter: "blur(16px)",
-          border: "1px solid rgba(255,255,255,0.06)",
+          border: "1px solid rgba(35, 83, 56, 0.45)",
           boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
         }}
       >
@@ -79,7 +79,7 @@ export function LeftPanel({
         )}
 
         {/* Separator */}
-        <div className="w-6 mx-auto my-1 border-t border-white/10" />
+        <div className="w-6 mx-auto my-1 border-t border-[#235338]/40" />
 
         {/* Transform mode buttons */}
         <ToolButton

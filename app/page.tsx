@@ -25,8 +25,8 @@ const PathTracerSandbox = dynamic(
           <div
             className="w-10 h-10 rounded-full"
             style={{
-              border: "2px solid rgba(99, 102, 241, 0.2)",
-              borderTopColor: "#6366f1",
+              border: "2px solid rgba(116, 195, 17, 0.2)",
+              borderTopColor: "#74c311",
               animation: "spin 1s linear infinite",
             }}
           />

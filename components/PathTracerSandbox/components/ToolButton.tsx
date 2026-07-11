@@ -19,8 +19,8 @@ export function ToolButton({
       className="relative w-10 h-10 rounded-xl flex items-center justify-center
         transition-all duration-200 cursor-pointer group"
       style={{
-        background: active ? "rgba(99, 102, 241, 0.25)" : "transparent",
-        color: active ? "#a5b4fc" : "rgba(255,255,255,0.5)",
+        background: active ? "rgba(116, 195, 17, 0.18)" : "transparent",
+        color: active ? "#74c311" : "rgba(255,255,255,0.5)",
       }}
       onMouseEnter={(e) => {
         if (!active) {
