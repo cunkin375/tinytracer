@@ -70,7 +70,7 @@ const _worldPos = new THREE.Vector3();
 function isTracedSphere(obj: THREE.Object3D): obj is THREE.Mesh {
   return (
     obj instanceof THREE.Mesh &&
-    (obj.userData.isSphere === true || obj.geometry.type === "SphereGeometry")
+    obj.userData.isSphere === true
   );
 }
 
