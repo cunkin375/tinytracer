@@ -3,7 +3,8 @@ import type { RefObject } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
-import { SPHERE_CONFIGS, ORTHO_FRUSTUM_SIZE } from "../constants";
+import { ORTHO_FRUSTUM_SIZE } from "../constants";
+import { createSceneSpheres } from "../objects/sceneSpheres";
 import type { CameraMode, SceneRefs } from "../types";
 
 /**
@@ -106,20 +107,9 @@ export function useThreeScene(
 
     const selectables: THREE.Mesh[] = [];
 
-    SPHERE_CONFIGS.forEach(({ position, radius, color }, i) => {
-      const geo = new THREE.SphereGeometry(radius, 64, 64);
-      const mat = new THREE.MeshStandardMaterial({
-        color,
-        roughness: 0.2,
-        metalness: 0.6,
-      });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(position[0], position[1], position[2]);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.name = `Sphere ${i + 1}`;
-      scene.add(mesh);
-      selectables.push(mesh);
+    createSceneSpheres().forEach((sphere) => {
+      scene.add(sphere);
+      selectables.push(sphere);
     });
 
     // ── Controls ───────────────────────────────────────────────────────────
