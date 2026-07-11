@@ -394,6 +394,7 @@ export function useThreeScene(
         });
 
         renderer.dispose();
+        renderer.forceContextLoss();
         if (container.contains(renderer.domElement)) {
           container.removeChild(renderer.domElement);
         }
