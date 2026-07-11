@@ -150,7 +150,7 @@
 
   .field { margin-bottom: 12px; }
   .field label { display: block; font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
-  .field input[type="number"], .field input[type="text"] {
+  .field input[type="number"], .field input[type="text"], .field select {
     width: 100%;
     background: rgba(255,255,255,0.06);
     border: 1px solid var(--border);
@@ -260,6 +260,28 @@
     <p class="empty-hint" id="list-empty-hint">Nothing added yet.</p>
 
     <button class="ghost-btn" id="clear-btn" style="margin-top:14px; width:100%;">Clear all</button>
+
+    <h2 class="spaced">Skybox</h2>
+    <div class="field">
+      <label>Shape</label>
+      <select id="skybox-shape">
+        <option value="Sphere" selected>Sphere</option>
+        <option value="Cylinder">Cylinder</option>
+        <option value="Box">Box</option>
+      </select>
+    </div>
+    <div class="field" style="margin-bottom: 0;">
+      <label>Horizontal repeat</label>
+      <select id="skybox-repeat">
+        <option value="1">1×</option>
+        <option value="2">2×</option>
+        <option value="3" selected>3×</option>
+        <option value="4">4×</option>
+        <option value="5">5×</option>
+        <option value="6">6×</option>
+        <option value="8">8×</option>
+      </select>
+    </div>
   </aside>
 
   <div id="viewport">
@@ -318,7 +340,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x12121a);
 scene.fog = new THREE.Fog(0x12121a, 20, 50);
 
-const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 300);
 camera.position.set(5, 4, 6);
 
 const ambientLight = new THREE.AmbientLight(0xc8c0e8, 0.6);
@@ -345,6 +367,68 @@ scene.add(ground);
 const grid = new THREE.GridHelper(30, 30, 0x2a2a4a, 0x1e1e38);
 grid.position.y = 0.005;
 scene.add(grid);
+
+// ─── Skybox ────────────────────────────────────────────────────────────
+
+// Playground for the same skybox in components/PathTracerSandbox/objects/
+// Skybox.ts — pick a shape and repeat count here, then carry over whatever
+// looks best. The source texture is a single landscape painting (not a
+// full panorama), so it's tiled horizontally rather than mapped 1:1.
+const SKYBOX_RADIUS = 90;
+let skyboxTexture = null;
+let skyboxMesh = null;
+
+function buildSkyboxGeometry(shapeType) {
+  if (shapeType === "Cylinder") {
+    // Open-ended: no cap UV distortion, and this texture has no real zenith
+    // to show at the top/bottom anyway.
+    return new THREE.CylinderGeometry(SKYBOX_RADIUS, SKYBOX_RADIUS, SKYBOX_RADIUS, 60, 1, true);
+  }
+  if (shapeType === "Box") {
+    return new THREE.BoxGeometry(SKYBOX_RADIUS, SKYBOX_RADIUS, SKYBOX_RADIUS);
+  }
+  return new THREE.SphereGeometry(SKYBOX_RADIUS, 60, 40);
+}
+
+function rebuildSkybox() {
+  if (skyboxMesh) {
+    scene.remove(skyboxMesh);
+    skyboxMesh.geometry.dispose();
+    skyboxMesh.material.dispose();
+    skyboxMesh = null;
+  }
+  if (!skyboxTexture) return;
+
+  const shapeType = document.getElementById("skybox-shape").value;
+  const repeat = parseInt(document.getElementById("skybox-repeat").value, 10);
+
+  // Box UVs are per-face (0–1 each), not a continuous wrap, so "repeat"
+  // tiles the image N times per face there instead of stitching it N times
+  // around the horizon like it does on Sphere/Cylinder — left as-is since
+  // this panel is for comparing the options, not just the sphere.
+  const texture = skyboxTexture.clone();
+  texture.needsUpdate = true;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.repeat.x = repeat;
+
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    side: THREE.BackSide,
+    fog: false,
+  });
+  skyboxMesh = new THREE.Mesh(buildSkyboxGeometry(shapeType), material);
+  skyboxMesh.name = "Skybox";
+  scene.add(skyboxMesh);
+}
+
+new THREE.TextureLoader().load("/skybox-texture.png", (texture) => {
+  texture.colorSpace = THREE.SRGBColorSpace;
+  skyboxTexture = texture;
+  rebuildSkybox();
+});
+
+document.getElementById("skybox-shape").addEventListener("change", rebuildSkybox);
+document.getElementById("skybox-repeat").addEventListener("change", rebuildSkybox);
 
 const orbitControls = new OrbitControls(camera, renderer.domElement);
 orbitControls.enableDamping = true;

@@ -3,17 +3,16 @@ import type { RefObject } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
+import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { ORTHO_FRUSTUM_SIZE } from "../constants";
 import { Cube } from "../objects/Cube";
 import { Pyramid } from "../objects/Pyramid";
+import { createSkybox, preloadSkyboxTexture } from "../objects/Skybox";
 import { Sphere } from "../objects/Sphere";
 import { createSceneCubes } from "../objects/sceneCubes";
 import { createScenePyramids } from "../objects/scenePyramids";
 import { createSceneSpheres } from "../objects/sceneSpheres";
 import type { CameraMode, SceneRefs } from "../types";
-import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
-
-
 
 /**
  * Builds the Three.js scene (renderer, cameras, lighting, spheres, controls,
@@ -41,7 +40,12 @@ export function useThreeScene(
     let cleanup: (() => void) | undefined;
 
     (async () => {
-      await Promise.all([Sphere.preload(), Cube.preload(), Pyramid.preload()]);
+      await Promise.all([
+        Sphere.preload(),
+        Cube.preload(),
+        Pyramid.preload(),
+        preloadSkyboxTexture(),
+      ]);
       if (cancelled) return;
 
       const width = container.clientWidth;
@@ -65,10 +69,13 @@ export function useThreeScene(
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0x12121a);
       scene.fog = new THREE.Fog(0x12121a, 20, 50);
+      scene.add(createSkybox());
 
       // ── Cameras ──────────────────────────────────────────────────────────
+      // far=200 gives headroom beyond the skybox sphere (radius 90) so it
+      // never gets clipped as the camera orbits.
 
-      const perspCamera = new THREE.PerspectiveCamera(50, aspect, 0.1, 100);
+      const perspCamera = new THREE.PerspectiveCamera(50, aspect, 0.1, 200);
       perspCamera.position.set(6, 5, 8);
       perspCamera.lookAt(0, 0, 0);
 
@@ -80,7 +87,7 @@ export function useThreeScene(
         orthoHalfH,
         -orthoHalfH,
         0.1,
-        100
+        200
       );
       orthoCamera.position.set(0, 0, 15); // default: front view
       orthoCamera.lookAt(0, 0, 0);
