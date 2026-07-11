@@ -18,4 +18,8 @@ export interface SceneRefs {
   selectedObject: THREE.Mesh | null;
   raycaster: THREE.Raycaster;
   pointer: THREE.Vector2;
+  /** Loads and places a new Car instance; the only object type addable/movable from the main app's UI. */
+  addCar: () => void;
+  /** Adds/removes trees to match `count`, driven by the tree-count slider. */
+  setTreeCount: (count: number) => void;
 }

@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
-import { ORTHO_FRUSTUM_SIZE } from "../constants";
+import { DEFAULT_TREE_COUNT, ORTHO_FRUSTUM_SIZE } from "../constants";
 import { createSkybox, preloadSkyboxTexture } from "../objects/Skybox";
 import { fitSkyboxToTerrain, snapObjectToTerrain } from "../objects/terrain";
 import type { CameraMode, SceneRefs } from "../types";
@@ -156,26 +156,13 @@ export function useThreeScene(
         if (terrainObject) snapObjectToTerrain(object, terrainObject);
       };
 
-      // The skybox (whatever its current fitted size is) is an open-ended
-      // shape with no top/bottom cap, so a camera angle steep enough to
-      // clear its rim exposes the raw scene background: black void again,
-      // just from a different direction than the ground/fog cases. Reading
-      // the skybox's *actual* current world bounds (rather than guessing a
-      // fixed safe angle) means this stays correct as fitSkyboxToTerrain
-      // resizes it for whatever terrain is loaded.
-      const applyOrbitSafetyLimits = () => {
-        const skyboxBounds = new THREE.Box3().setFromObject(skybox);
-        const halfHeight = (skyboxBounds.max.y - skyboxBounds.min.y) / 2;
-        const centerY = (skyboxBounds.max.y + skyboxBounds.min.y) / 2;
-        const targetOffset = Math.abs(orbitControls.target.y - centerY);
-        const verticalClearance = Math.max(0.5, halfHeight - targetOffset);
-        const angle = Math.acos(
-          Math.min(1, verticalClearance / orbitControls.maxDistance)
-        );
-        orbitControls.minPolarAngle = Math.max(0.05, angle);
-        orbitControls.maxPolarAngle = Math.min(Math.PI - 0.05, Math.PI - angle);
-      };
-      applyOrbitSafetyLimits(); // using the default (pre-terrain) skybox size
+      // The skybox is a full sphere (see Skybox.ts) with no open rim to see
+      // past, so the camera is free to orbit almost the full polar range —
+      // just kept a hair short of the exact poles, where OrbitControls'
+      // spherical-coordinate math is singular and can briefly flip the
+      // camera's up vector.
+      orbitControls.minPolarAngle = 0.01;
+      orbitControls.maxPolarAngle = Math.PI - 0.01;
 
       const resnapAll = () => {
         if (!terrainObject) return;
@@ -183,7 +170,6 @@ export function useThreeScene(
         const bounds = new THREE.Box3().setFromObject(terrainObject);
         ground.position.y = bounds.min.y - 0.1;
         registeredObjects.forEach((object) => snapObjectToTerrain(object, terrainObject!));
-        applyOrbitSafetyLimits();
       };
 
       const registerTerrain = (terrain: THREE.Object3D) => {
@@ -196,18 +182,19 @@ export function useThreeScene(
 
       const selectables: THREE.Mesh[] = [];
 
-      // ── Trees: count scales with the terrain's footprint ─────────────────
-      // Density is calibrated so the default ~4-unit-radius terrain gets a
-      // similarly-sized forest to before; a bigger terrain gets more trees,
-      // a smaller one fewer — but rebalanceTreeCount only adds/removes the
-      // difference, so trees that stay never move.
+      // ── Trees: count is set directly by the tree-count slider (React UI) ──
+      // via setTreeCount, not derived from the terrain's footprint —
+      // rebalanceTreeCount only adds/removes the difference between the
+      // current and target count, so trees that stay are never moved. Trees
+      // aren't in `selectables`: nothing in the main app is movable except a
+      // dropdown-added Car (see addCar below).
 
       const TREE_MIN_DISTANCE = 2.0;
-      const TREE_DENSITY = 15 / (Math.PI * 4 * 4);
       const MAX_PLACEMENT_ATTEMPTS = 300;
       const FALLBACK_PLACEMENT_RADIUS = 6; // used before any terrain exists
 
       let treeTemplate: THREE.Object3D | null = null;
+      let treeCount = DEFAULT_TREE_COUNT;
       const placedTrees: { object: THREE.Object3D; xz: THREE.Vector2 }[] = [];
 
       const currentPlacementRadius = () => {
@@ -218,42 +205,28 @@ export function useThreeScene(
         return Math.max(size.x, size.z) / 2;
       };
 
-      const targetTreeCount = () => {
-        const radius = currentPlacementRadius();
-        return Math.max(1, Math.round(Math.PI * radius * radius * TREE_DENSITY));
-      };
-
       const placeTree = (xz: THREE.Vector2) => {
         if (!treeTemplate) return;
         const tree = treeTemplate.clone(true);
         tree.position.set(xz.x, 0, xz.y);
         scene.add(tree);
-        tree.traverse((child) => {
-          if (child instanceof THREE.Mesh) selectables.push(child);
-        });
         registerSceneObject(tree);
         placedTrees.push({ object: tree, xz });
       };
 
       const removeTree = (entry: { object: THREE.Object3D; xz: THREE.Vector2 }) => {
         scene.remove(entry.object);
-        entry.object.traverse((child) => {
-          if (child instanceof THREE.Mesh) {
-            const idx = selectables.indexOf(child);
-            if (idx !== -1) selectables.splice(idx, 1);
-          }
-        });
         const registeredIdx = registeredObjects.indexOf(entry.object);
         if (registeredIdx !== -1) registeredObjects.splice(registeredIdx, 1);
         const placedIdx = placedTrees.indexOf(entry);
         if (placedIdx !== -1) placedTrees.splice(placedIdx, 1);
       };
 
-      // Adds/removes trees to match the current terrain's area. Trees that
-      // are kept are never moved — only the count changes.
+      // Adds/removes trees to match `treeCount`. Trees that are kept are
+      // never moved — only the count changes.
       const rebalanceTreeCount = () => {
         if (!treeTemplate) return;
-        const target = targetTreeCount();
+        const target = treeCount;
 
         while (placedTrees.length > target) {
           removeTree(placedTrees[placedTrees.length - 1]);
@@ -276,6 +249,11 @@ export function useThreeScene(
         }
       };
 
+      const setTreeCount = (count: number) => {
+        treeCount = Math.max(0, Math.round(count));
+        rebalanceTreeCount();
+      };
+
       new OBJLoader().load("/models/Tree.obj", (object) => {
         const material = new THREE.MeshStandardMaterial({
           vertexColors: true,
@@ -294,11 +272,40 @@ export function useThreeScene(
         rebalanceTreeCount();
       });
 
-      new OBJLoader().load("/models/Car.obj", (object) => {
+      // Car is not auto-loaded — it's only added on demand via the "Add Car"
+      // dropdown (see addCar, exposed on sceneRef below), and is the only
+      // object type in the main app that ends up in `selectables`: everything
+      // else (terrain, trees, the solar panel) is locked down/unselectable.
+      const addCar = () => {
+        new OBJLoader().load("/models/Car.obj", (object) => {
+          const material = new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            roughness: 0.2,
+            metalness: 0.6,
+          });
+          // Rest the model's bottom on the floor regardless of how it was
+          // positioned in the editor.
+          const bounds = new THREE.Box3().setFromObject(object);
+          object.position.y -= bounds.min.y;
+          scene.add(object);
+          object.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+              child.material = material;
+              child.castShadow = true;
+              child.receiveShadow = true;
+              child.userData.isTraceable = true;
+              selectables.push(child);
+            }
+          });
+          registerSceneObject(object);
+        });
+      };
+
+      new OBJLoader().load("/models/SolarPannel.obj", (object) => {
         const material = new THREE.MeshStandardMaterial({
           vertexColors: true,
-          roughness: 0.2,
-          metalness: 0.6,
+          roughness: 0.36,
+          metalness: 0.78,
         });
         // Rest the model's bottom on the floor regardless of how it was
         // positioned in the editor.
@@ -310,18 +317,19 @@ export function useThreeScene(
             child.material = material;
             child.castShadow = true;
             child.receiveShadow = true;
-            child.userData.isTraceable = true;
-            selectables.push(child);
           }
         });
+        // Snap onto the terrain if one's already loaded, or queue to snap
+        // onto it once one arrives.
         registerSceneObject(object);
       });
+
 
       new OBJLoader().load("/models/Terrain.obj", (object) => {
         const material = new THREE.MeshStandardMaterial({
           vertexColors: true,
-          roughness: 0.2,
-          metalness: 0.6,
+          roughness: 0.20,
+          metalness: 0.60,
         });
         // Rest the model's bottom on the floor regardless of how it was
         // positioned in the editor.
@@ -333,14 +341,38 @@ export function useThreeScene(
             child.material = material;
             child.castShadow = true;
             child.receiveShadow = true;
-            selectables.push(child);
           }
         });
-        // Level/resize the skybox to this terrain, drop the ground below
-        // it, and settle every object already in the scene onto its
-        // surface so nothing clips underneath it.
+        // Level the skybox with this terrain and drop every object already
+        // in the scene onto its surface so nothing clips underneath it.
         registerTerrain(object);
       });
+
+
+      // new OBJLoader().load("/models/Terrain.obj", (object) => {
+      //   const material = new THREE.MeshStandardMaterial({
+      //     vertexColors: true,
+      //     roughness: 0.2,
+      //     metalness: 0.6,
+      //   });
+      //   // Rest the model's bottom on the floor regardless of how it was
+      //   // positioned in the editor.
+      //   const bounds = new THREE.Box3().setFromObject(object);
+      //   object.position.y -= bounds.min.y;
+      //   scene.add(object);
+      //   object.traverse((child) => {
+      //     if (child instanceof THREE.Mesh) {
+      //       child.material = material;
+      //       child.castShadow = true;
+      //       child.receiveShadow = true;
+      //       selectables.push(child);
+      //     }
+      //   });
+      //   // Level/resize the skybox to this terrain, drop the ground below
+      //   // it, and settle every object already in the scene onto its
+      //   // surface so nothing clips underneath it.
+      //   registerTerrain(object);
+      // });
 
       // ── Controls ─────────────────────────────────────────────────────────
 
@@ -356,20 +388,13 @@ export function useThreeScene(
       });
 
       // Keeps guarantee 8 (nothing floats/clips) true even after the user
-      // manually moves something, not just at initial placement. Dragging
-      // the terrain itself re-settles every other object instead of trying
-      // to snap the terrain onto itself, and rebalances the tree count if
-      // it was scaled.
+      // drags the Car — the only object that's ever attached to
+      // transformControls in the main app, since terrain/trees/the solar
+      // panel aren't in `selectables` and so can never be picked up here.
       transformControls.addEventListener("dragging-changed", (event) => {
         if (event.value || !terrainObject) return;
         const target = transformControls.object;
         if (!target) return;
-
-        if (target === terrainObject) {
-          resnapAll();
-          if (transformControls.mode === "scale") rebalanceTreeCount();
-          return;
-        }
         snapObjectToTerrain(target, terrainObject);
       });
 
@@ -456,6 +481,8 @@ export function useThreeScene(
         selectedObject: null,
         raycaster,
         pointer,
+        addCar,
+        setTreeCount,
       };
 
       animate();

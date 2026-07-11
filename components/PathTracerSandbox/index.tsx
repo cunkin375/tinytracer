@@ -10,6 +10,8 @@ import { TopBar } from "./components/TopBar";
 import { LeftPanel } from "./components/LeftPanel";
 import { BottomStatusBar } from "./components/BottomStatusBar";
 import { PathTracerOutput } from "./components/PathTracerOutput";
+import { ScenePanel } from "./components/ScenePanel";
+import { DEFAULT_TREE_COUNT } from "./constants";
 import "./PathTracerSandbox.css";
 
 export default function PathTracerSandbox() {
@@ -20,6 +22,7 @@ export default function PathTracerSandbox() {
   const [cameraMode, setCameraMode] = useState<CameraMode>("perspective");
   const [orthoView, setOrthoView] = useState<OrthoView>("front");
   const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [treeCount, setTreeCount] = useState(DEFAULT_TREE_COUNT);
   // Sphere/Cube/Pyramid geometry now loads from .obj files asynchronously,
   // so the scene isn't ready the instant these hooks are called — see
   // useThreeScene's onReady callback and useCameraMode's sceneReady param.
@@ -84,6 +87,15 @@ export default function PathTracerSandbox() {
     sceneRef.current?.transformControls.setMode(mode);
   }, []);
 
+  const handleTreeCountChange = useCallback((count: number) => {
+    setTreeCount(count);
+    sceneRef.current?.setTreeCount(count);
+  }, []);
+
+  const handleAddCar = useCallback(() => {
+    sceneRef.current?.addCar();
+  }, []);
+
   useKeyboardShortcuts(isTracing, sceneRef, setTransformMode, setSelectedName);
 
   return (
@@ -105,6 +117,12 @@ export default function PathTracerSandbox() {
         cameraMode={cameraMode}
         orthoView={orthoView}
         selectedName={selectedName}
+      />
+
+      <ScenePanel
+        treeCount={treeCount}
+        onTreeCountChange={handleTreeCountChange}
+        onAddCar={handleAddCar}
       />
 
       <PathTracerOutput

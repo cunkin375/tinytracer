@@ -2,8 +2,7 @@ import * as THREE from "three";
 
 const SKYBOX_TEXTURE_URL = "/skybox-texture.png";
 const SKYBOX_RADIUS = 90;
-const SKYBOX_HEIGHT = 90;
-const SKYBOX_HORIZONTAL_REPEAT = 4;
+const SKYBOX_HORIZONTAL_REPEAT = 5;
 
 let cachedTexture: THREE.Texture | null = null;
 const loader = new THREE.TextureLoader();
@@ -15,7 +14,7 @@ export async function preloadSkyboxTexture(): Promise<THREE.Texture> {
   const texture = await loader.loadAsync(SKYBOX_TEXTURE_URL);
   texture.colorSpace = THREE.SRGBColorSpace;
   // The source image is a single landscape painting, not a full 360°
-  // panorama, so it's tiled horizontally around the cylinder instead.
+  // panorama, so it's tiled horizontally around the sphere instead.
   texture.wrapS = THREE.RepeatWrapping;
   texture.repeat.x = SKYBOX_HORIZONTAL_REPEAT;
   cachedTexture = texture;
@@ -23,13 +22,14 @@ export async function preloadSkyboxTexture(): Promise<THREE.Texture> {
 }
 
 /**
- * A large inward-facing cylinder painted with the skybox texture. Excluded
- * from fog (it represents background/infinity, not scene geometry) and
- * from `selectables` (it's a backdrop, not an interactive object).
+ * A large inward-facing sphere painted with the skybox texture, repeated
+ * SKYBOX_HORIZONTAL_REPEAT times around the equator. Excluded from
+ * `selectables` (it's a backdrop, not an interactive object).
  *
- * Open-ended (no top/bottom caps) — there's no real zenith/nadir to show for
- * this texture anyway, and it avoids cap UV distortion. `alignSkyboxToTerrain`
- * (see terrain.ts) repositions it vertically once a terrain is loaded.
+ * A full sphere has no open rim like the old cylinder did, but its UVs still
+ * pinch at the poles — `fitSkyboxToTerrain` (see terrain.ts) keeps it
+ * vertically centered on the terrain rather than resting a pole at the
+ * ground, so the camera stays near the clean equatorial band.
  */
 export function createSkybox(): THREE.Mesh {
   const texture = cachedTexture;
@@ -39,14 +39,7 @@ export function createSkybox(): THREE.Mesh {
     );
   }
 
-  const geometry = new THREE.CylinderGeometry(
-    SKYBOX_RADIUS,
-    SKYBOX_RADIUS,
-    SKYBOX_HEIGHT,
-    60,
-    1,
-    true
-  );
+  const geometry = new THREE.SphereGeometry(SKYBOX_RADIUS, 60, 40);
   const material = new THREE.MeshBasicMaterial({
     map: texture,
     side: THREE.BackSide,

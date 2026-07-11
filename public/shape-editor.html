@@ -284,9 +284,9 @@
       <select id="skybox-repeat">
         <option value="1">1×</option>
         <option value="2">2×</option>
-        <option value="3" selected>3×</option>
+        <option value="3">3×</option>
         <option value="4">4×</option>
-        <option value="5">5×</option>
+        <option value="5" selected>5×</option>
         <option value="6">6×</option>
         <option value="8">8×</option>
       </select>
@@ -335,59 +335,90 @@ const DEFAULT_METALNESS = 0.6;
 const DEFAULT_COLOR = { Sphere: "#8cb4d9", Cube: "#dcb965", Pyramid: "#e0a3ac" };
 const TERRAIN_DEFAULT_GRADIENT = { low: "#4a6b3f", high: "#cfe8b8" };
 
-// Chunky by default (see Triangle Size in the inspector): a small ring/
-// radial-segment count means big, flat-shaded triangles for a PS1-style
-// low-poly terrain instead of a smooth continuous surface.
-const TERRAIN_RADIUS = 4;
+// Chunky by default (see Triangle Size in the inspector): a small lat/lon
+// segment count means big, flat-shaded triangles for a PS1-style low-poly
+// planet instead of a smooth continuous surface.
+const TERRAIN_BASE_RADIUS = 4;
 const TERRAIN_DEFAULT_TRIANGLE_SIZE = 1;
 const TERRAIN_HEIGHT_LIMIT = 8;
-const TERRAIN_MIN_RADIAL_SEGMENTS = 8;
+const TERRAIN_MIN_LON_SEGMENTS = 8;
+const TERRAIN_MIN_LAT_SEGMENTS = 4;
 
-// Rings step inward from the outer radius at ~triangleSize spacing; radial
-// segment count is picked so the outermost ring's triangles have about the
-// same edge length as that radial spacing, keeping triangles roughly even
-// no matter how chunky/fine triangleSize is.
-function terrainRingsForTriangleSize(triangleSize) {
-  return Math.max(1, Math.round(TERRAIN_RADIUS / triangleSize));
+// Longitude segments are picked from the sphere's equatorial circumference
+// (2πr) at ~triangleSize spacing; latitude segments from its half-
+// circumference (πr, pole to pole) at the same spacing, so triangles stay
+// roughly even (not stretched pole-to-pole vs. around the equator) no matter
+// how chunky/fine triangleSize is.
+function terrainLonSegmentsForTriangleSize(baseRadius, triangleSize) {
+  return Math.max(TERRAIN_MIN_LON_SEGMENTS, Math.round((2 * Math.PI * baseRadius) / triangleSize));
 }
-function terrainRadialSegmentsForTriangleSize(triangleSize) {
-  const rings = terrainRingsForTriangleSize(triangleSize);
-  return Math.max(TERRAIN_MIN_RADIAL_SEGMENTS, Math.round(rings * Math.PI * 2));
+function terrainLatSegmentsForTriangleSize(baseRadius, triangleSize) {
+  return Math.max(TERRAIN_MIN_LAT_SEGMENTS, Math.round((Math.PI * baseRadius) / triangleSize));
 }
-function terrainVertexCount(rings, radialSegments) {
-  return 1 + rings * radialSegments;
+function terrainVertexCount(latSegments, lonSegments) {
+  return 2 + (latSegments - 1) * lonSegments;
 }
 
-// Builds a concentric-ring circular grid: one center vertex, then `rings`
-// rings of `radialSegments` vertices each, fanned from the center and
-// quad-stitched (as two triangles) between adjacent rings. Vertex order is
-// [center, ring1..., ring2..., ...] — `shape.heights` is indexed the same
-// way, and sculpting/gradient code below relies on that alignment.
-function buildCircularTerrainGeometry(shape) {
-  const { radius, rings, radialSegments, heights } = shape;
-  const positions = new Float32Array(terrainVertexCount(rings, radialSegments) * 3);
+// Every vertex's direction from the sphere's own center, purely from its
+// place in the lat/lon grid — independent of that vertex's current height
+// offset or any scale baked into the mesh. Used to place a vertex during
+// geometry build/sculpt; hit-testing (findNearestVertex) instead reads the
+// mesh's *actual* current positions, since those already reflect baked scale.
+function vertexBaseDirection(shape, index) {
+  const southPoleIndex = 1 + (shape.latSegments - 1) * shape.lonSegments;
+  if (index === 0) return { x: 0, y: 1, z: 0 };
+  if (index === southPoleIndex) return { x: 0, y: -1, z: 0 };
+  const ring = 1 + Math.floor((index - 1) / shape.lonSegments);
+  const seg = (index - 1) % shape.lonSegments;
+  const phi = (ring / shape.latSegments) * Math.PI; // 0 at north pole, PI at south pole
+  const theta = (seg / shape.lonSegments) * Math.PI * 2;
+  return {
+    x: Math.sin(phi) * Math.cos(theta),
+    y: Math.cos(phi),
+    z: Math.sin(phi) * Math.sin(theta),
+  };
+}
 
-  positions[1] = heights[0] ?? 0;
-  for (let r = 1; r <= rings; r++) {
-    const ringRadius = (r / rings) * radius;
-    for (let s = 0; s < radialSegments; s++) {
-      const theta = (s / radialSegments) * Math.PI * 2;
-      const idx = 1 + (r - 1) * radialSegments + s;
-      positions[idx * 3] = Math.cos(theta) * ringRadius;
-      positions[idx * 3 + 1] = heights[idx] ?? 0;
-      positions[idx * 3 + 2] = Math.sin(theta) * ringRadius;
-    }
+// Builds a UV-sphere grid: one north-pole vertex, `latSegments - 1` rings of
+// `lonSegments` vertices each, one south-pole vertex — the same fan+rings
+// shape as the old circular disc, just wrapped over a sphere instead of left
+// flat, with a second pole where the disc's open rim used to be. Each
+// vertex sits at `baseRadius + heights[i]` along its own radial direction,
+// so sculpting later just needs to change that one scalar per vertex.
+// Vertex order is [northPole, ring1..., ring2..., ..., southPole] —
+// `shape.heights` is indexed the same way, and sculpting/gradient code below
+// relies on that alignment.
+function buildSphereTerrainGeometry(shape) {
+  const { baseRadius, latSegments, lonSegments, heights } = shape;
+  const vertexCount = terrainVertexCount(latSegments, lonSegments);
+  const positions = new Float32Array(vertexCount * 3);
+
+  for (let i = 0; i < vertexCount; i++) {
+    const dir = vertexBaseDirection(shape, i);
+    const r = baseRadius + (heights[i] ?? 0);
+    positions[i * 3] = dir.x * r;
+    positions[i * 3 + 1] = dir.y * r;
+    positions[i * 3 + 2] = dir.z * r;
   }
 
+  const southPoleIndex = 1 + (latSegments - 1) * lonSegments;
   const indices = [];
-  for (let s = 0; s < radialSegments; s++) {
-    indices.push(0, 1 + s, 1 + ((s + 1) % radialSegments));
+
+  // North pole fan → first ring. Winding matches the old disc's center fan
+  // (which pointed +Y, i.e. "up"/outward at the pole) exactly, since near
+  // the pole the surface is nearly flat and tangent to the same plane.
+  for (let s = 0; s < lonSegments; s++) {
+    indices.push(0, 1 + s, 1 + ((s + 1) % lonSegments));
   }
-  for (let r = 1; r < rings; r++) {
-    const ringStart = 1 + (r - 1) * radialSegments;
-    const nextRingStart = 1 + r * radialSegments;
-    for (let s = 0; s < radialSegments; s++) {
-      const s2 = (s + 1) % radialSegments;
+
+  // Quad-stitched rings in between, same relative winding as the old disc's
+  // ring-to-ring stitching (increasing ring index ~ moving outward there,
+  // ~ moving from north toward south here).
+  for (let r = 1; r < latSegments - 1; r++) {
+    const ringStart = 1 + (r - 1) * lonSegments;
+    const nextRingStart = 1 + r * lonSegments;
+    for (let s = 0; s < lonSegments; s++) {
+      const s2 = (s + 1) % lonSegments;
       const a = ringStart + s;
       const b = ringStart + s2;
       const c = nextRingStart + s;
@@ -396,9 +427,18 @@ function buildCircularTerrainGeometry(shape) {
     }
   }
 
+  // Last ring → south pole fan. Wound opposite the north fan (ring vertices
+  // swapped) since the outward normal here points the opposite way (-Y at
+  // the pole rather than +Y).
+  const lastRingStart = 1 + (latSegments - 2) * lonSegments;
+  for (let s = 0; s < lonSegments; s++) {
+    indices.push(southPoleIndex, lastRingStart + ((s + 1) % lonSegments), lastRingStart + s);
+  }
+
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geometry.setIndex(indices);
+  geometry.computeVertexNormals();
   return geometry;
 }
 
@@ -575,8 +615,15 @@ new THREE.TextureLoader().load("/skybox-texture.png", (texture) => {
   rebuildSkybox();
 });
 
-document.getElementById("skybox-shape").addEventListener("change", rebuildSkybox);
-document.getElementById("skybox-repeat").addEventListener("change", rebuildSkybox);
+document.getElementById("skybox-shape").addEventListener("change", () => {
+  rebuildSkybox();
+  persistEditorState();
+});
+document.getElementById("skybox-repeat").addEventListener("change", () => {
+  rebuildSkybox();
+  persistEditorState();
+});
+document.getElementById("model-name").addEventListener("change", persistEditorState);
 
 const orbitControls = new OrbitControls(camera, renderer.domElement);
 orbitControls.enableDamping = true;
@@ -654,7 +701,7 @@ function buildMesh(shape) {
   } else if (shape.type === "Pyramid") {
     geometry = new THREE.ConeGeometry(shape.radius, shape.height, 4);
   } else {
-    geometry = buildCircularTerrainGeometry(shape);
+    geometry = buildSphereTerrainGeometry(shape);
     geometry.setAttribute("color", new THREE.BufferAttribute(buildTerrainColorAttribute(shape), 3));
   }
   const [sx, sy, sz] = shape.scale;
@@ -806,6 +853,7 @@ function beginUndoSession() {
 }
 function endUndoSession() {
   undoSessionActive = false;
+  persistEditorState();
 }
 
 function restoreSnapshot(snapshot) {
@@ -836,6 +884,50 @@ function redo() {
   restoreSnapshot(redoStack.pop());
 }
 
+// ─── Persistence (bridges the main app's "Edit in Editor" button) ─────────
+//
+// The main app (useThreeScene.ts) is a locked-down viewer with no shape-
+// editing surface of its own — it just links to this page. So "bring me to
+// the editor with my current changes in place" is implemented as the editor
+// remembering its own last session: every mutation here is autosaved to
+// localStorage, and reloaded on startup below. In the normal workflow (build
+// in the editor, export, view the result in the main app, click back in) the
+// editor really does still have the matching shape list from a moment ago.
+
+const EDITOR_STATE_STORAGE_KEY = "tinytracer:shapeEditorState";
+
+function persistEditorState() {
+  try {
+    const state = {
+      modelName: document.getElementById("model-name").value,
+      skyboxShape: document.getElementById("skybox-shape").value,
+      skyboxRepeat: document.getElementById("skybox-repeat").value,
+      shapes: snapshotShapes(),
+    };
+    localStorage.setItem(EDITOR_STATE_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Storage can fail (private browsing, quota) — persistence is a
+    // convenience, not a requirement for the editor to work.
+  }
+}
+
+function loadPersistedEditorState() {
+  try {
+    const raw = localStorage.getItem(EDITOR_STATE_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function restoreEditorState(state) {
+  if (state.modelName) document.getElementById("model-name").value = state.modelName;
+  if (state.skyboxShape) document.getElementById("skybox-shape").value = state.skyboxShape;
+  if (state.skyboxRepeat) document.getElementById("skybox-repeat").value = state.skyboxRepeat;
+  nextId = state.shapes.reduce((max, s) => Math.max(max, s.id), 0) + 1;
+  restoreSnapshot(state.shapes); // also renders the list/inspector and rebuilds the skybox
+}
+
 function addShape(type) {
   pushUndo();
   const id = nextId++;
@@ -845,9 +937,10 @@ function addShape(type) {
     color: DEFAULT_COLOR[type],
     roughness: DEFAULT_ROUGHNESS,
     metalness: DEFAULT_METALNESS,
-    // Terrain sits flush on the ground like the grid does; everything else
-    // spawns slightly above it.
-    position: type === "Terrain" ? [0, 0, 0] : [0, 0.5, 0],
+    // Terrain spawns resting on the ground (its south pole at y=0, like a
+    // planet-sized mound poking up out of the floor) like the disc used to
+    // sit flush with it; everything else spawns slightly above it.
+    position: type === "Terrain" ? [0, TERRAIN_BASE_RADIUS, 0] : [0, 0.5, 0],
     // Pyramids start with their flat face forward instead of an edge; the
     // gizmo's Rotate mode can turn any shape further from there.
     rotation: type === "Pyramid" ? [0, Math.PI / 4, 0] : [0, 0, 0],
@@ -857,11 +950,11 @@ function addShape(type) {
   else if (type === "Cube") shape.size = 1;
   else if (type === "Pyramid") { shape.radius = 0.6; shape.height = 1; }
   else {
-    shape.radius = TERRAIN_RADIUS;
+    shape.baseRadius = TERRAIN_BASE_RADIUS;
     shape.triangleSize = TERRAIN_DEFAULT_TRIANGLE_SIZE;
-    shape.rings = terrainRingsForTriangleSize(shape.triangleSize);
-    shape.radialSegments = terrainRadialSegmentsForTriangleSize(shape.triangleSize);
-    shape.heights = new Array(terrainVertexCount(shape.rings, shape.radialSegments)).fill(0);
+    shape.latSegments = terrainLatSegmentsForTriangleSize(shape.baseRadius, shape.triangleSize);
+    shape.lonSegments = terrainLonSegmentsForTriangleSize(shape.baseRadius, shape.triangleSize);
+    shape.heights = new Array(terrainVertexCount(shape.latSegments, shape.lonSegments)).fill(0);
     shape.colorLow = TERRAIN_DEFAULT_GRADIENT.low;
     shape.colorHigh = TERRAIN_DEFAULT_GRADIENT.high;
   }
@@ -1005,6 +1098,7 @@ function renderShapeList() {
 
     shapeListEl.appendChild(li);
   });
+  persistEditorState();
 }
 
 // ─── Inspector panel ─────────────────────────────────────────────────────
@@ -1096,9 +1190,9 @@ function renderInspector() {
       }
       pushUndo();
       shape.triangleSize = newSize;
-      shape.rings = terrainRingsForTriangleSize(newSize);
-      shape.radialSegments = terrainRadialSegmentsForTriangleSize(newSize);
-      shape.heights = new Array(terrainVertexCount(shape.rings, shape.radialSegments)).fill(0);
+      shape.latSegments = terrainLatSegmentsForTriangleSize(shape.baseRadius, newSize);
+      shape.lonSegments = terrainLonSegmentsForTriangleSize(shape.baseRadius, newSize);
+      shape.heights = new Array(terrainVertexCount(shape.latSegments, shape.lonSegments)).fill(0);
       refreshMesh(shape);
       attachTransformControls();
       renderShapeList();
@@ -1199,8 +1293,13 @@ function renderInspector() {
   inspectorEl.appendChild(actions);
 }
 
-renderShapeList();
-renderInspector();
+const persistedState = loadPersistedEditorState();
+if (persistedState && persistedState.shapes && persistedState.shapes.length > 0) {
+  restoreEditorState(persistedState);
+} else {
+  renderShapeList();
+  renderInspector();
+}
 
 // ─── Palette + toolbar wiring ────────────────────────────────────────────
 
@@ -1221,23 +1320,26 @@ const pointer = new THREE.Vector2();
 
 // TransformControls only ever moves a whole Object3D, so raising a single
 // vertex is a separate hand-rolled drag: pick the geometry vertex nearest
-// the click (in the mesh's local space, ignoring height so you can grab a
-// vertex regardless of how tall it already is), then map vertical mouse
-// movement directly onto that one vertex's height.
+// the click (by direction from the sphere's center, ignoring each vertex's
+// current height offset so you can grab it regardless of how far it already
+// bulges in or out), then map vertical mouse movement onto that one
+// vertex's height — which now means pushing/pulling it along its own
+// radial direction from the center, not just its Y coordinate.
 const SCULPT_SENSITIVITY = 0.02;
 let sculptDrag = null; // { shape, vertexIndex, startClientY, startHeight }
 
 function findNearestVertex(shape, worldPoint) {
   const local = shape.mesh.worldToLocal(worldPoint.clone());
+  const clickDir = local.clone().normalize();
   const position = shape.mesh.geometry.getAttribute("position");
   let closestIndex = 0;
-  let closestDistSq = Infinity;
+  let closestDot = -Infinity;
+  const v = new THREE.Vector3();
   for (let i = 0; i < position.count; i++) {
-    const dx = position.getX(i) - local.x;
-    const dz = position.getZ(i) - local.z;
-    const distSq = dx * dx + dz * dz;
-    if (distSq < closestDistSq) {
-      closestDistSq = distSq;
+    v.set(position.getX(i), position.getY(i), position.getZ(i)).normalize();
+    const dot = clickDir.dot(v); // 1 = same direction from center, i.e. closest angularly
+    if (dot > closestDot) {
+      closestDot = dot;
       closestIndex = i;
     }
   }
@@ -1252,15 +1354,18 @@ function startSculptDrag(shape, vertexIndex, clientY) {
 
 function updateSculptDrag(clientY) {
   const { shape, vertexIndex, startClientY, startHeight } = sculptDrag;
-  const delta = startClientY - clientY; // dragging up raises the vertex
+  const delta = startClientY - clientY; // dragging up pushes the vertex outward
   const height = Math.max(
     -TERRAIN_HEIGHT_LIMIT,
     Math.min(TERRAIN_HEIGHT_LIMIT, startHeight + delta * SCULPT_SENSITIVITY)
   );
   shape.heights[vertexIndex] = height;
+  const dir = vertexBaseDirection(shape, vertexIndex);
+  const r = shape.baseRadius + height;
   const position = shape.mesh.geometry.getAttribute("position");
-  position.setY(vertexIndex, height);
+  position.setXYZ(vertexIndex, dir.x * r, dir.y * r, dir.z * r);
   position.needsUpdate = true;
+  shape.mesh.geometry.computeVertexNormals();
   shape.mesh.geometry.computeBoundingSphere();
 
   // Recomputed in full (not just this vertex) since this height may have
@@ -1275,6 +1380,7 @@ function endSculptDrag() {
   sculptDrag = null;
   orbitControls.enabled = true;
   updateGroundForTerrain(); // sculpting changes the terrain's bounds
+  persistEditorState();
 }
 
 window.addEventListener("pointermove", (event) => {
