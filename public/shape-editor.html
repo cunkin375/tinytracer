@@ -1,0 +1,838 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>TinyTracer — Shape Editor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --panel: rgba(18, 18, 26, 0.9);
+    --border: rgba(255, 255, 255, 0.08);
+    --text: #e4e4ef;
+    --text-dim: rgba(255, 255, 255, 0.45);
+    --accent: #74c311;
+    --accent-dim: rgba(116, 195, 17, 0.18);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
+  body { font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 14px; font-weight: 600; margin: 0; white-space: nowrap; }
+  header p { margin: 0; font-size: 11px; color: var(--text-dim); }
+  header .spacer { flex: 1; }
+  header label { font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 6px; }
+  header input[type="text"] {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 6px 8px;
+    font-size: 12px;
+    width: 160px;
+  }
+
+  .main {
+    display: grid;
+    grid-template-columns: 220px 1fr 280px;
+    height: calc(100vh - 49px);
+  }
+
+  aside {
+    background: var(--panel);
+    overflow-y: auto;
+    padding: 12px;
+  }
+  aside.palette { border-right: 1px solid var(--border); }
+  aside.inspector { border-left: 1px solid var(--border); }
+
+  h2 {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin: 0 0 8px 0;
+  }
+  h2.spaced { margin-top: 18px; }
+
+  button {
+    font: inherit;
+    cursor: pointer;
+    border: none;
+    border-radius: 8px;
+    color: var(--text);
+    background: rgba(255,255,255,0.06);
+    transition: background 0.15s;
+  }
+  button:hover { background: rgba(255,255,255,0.1); }
+
+  .add-btn {
+    width: 100%;
+    text-align: left;
+    padding: 9px 10px;
+    margin-bottom: 6px;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .add-btn .swatch { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+
+  .primary-btn {
+    padding: 8px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    background: var(--accent);
+    color: #0a0a0f;
+  }
+  .primary-btn:hover { background: #85d61f; }
+  .primary-btn:disabled { opacity: 0.4; cursor: not-allowed; background: var(--accent); }
+
+  .ghost-btn {
+    padding: 6px 10px;
+    font-size: 11px;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid var(--border);
+  }
+  .ghost-btn:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+
+  #shape-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  #shape-list li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    border: 1px solid transparent;
+  }
+  #shape-list li:hover { background: rgba(255,255,255,0.05); }
+  #shape-list li.selected { background: var(--accent-dim); border-color: rgba(116,195,17,0.4); }
+  #shape-list li .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+  #shape-list li.selected .label { color: var(--text); }
+  #shape-list li button { background: transparent; padding: 2px 6px; font-size: 12px; color: var(--text-dim); }
+  #shape-list li button:hover { color: #ef4444; background: rgba(239,68,68,0.12); }
+  #shape-list .empty-hint { font-size: 11px; color: var(--text-dim); padding: 6px 2px; }
+
+  #viewport { position: relative; background: #12121a; }
+  #viewport canvas { display: block; }
+  #viewport .hint {
+    position: absolute;
+    bottom: 10px;
+    left: 12px;
+    font-size: 11px;
+    color: var(--text-dim);
+    pointer-events: none;
+  }
+
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
+  .field input[type="number"], .field input[type="text"] {
+    width: 100%;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+  .field input[type="color"] {
+    width: 100%;
+    height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    padding: 2px;
+  }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .empty-hint { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+  .inspector-actions { display: flex; gap: 6px; margin-top: 16px; }
+
+  dialog {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    width: min(720px, 92vw);
+    max-height: 86vh;
+    padding: 0;
+  }
+  dialog::backdrop { background: rgba(0,0,0,0.6); }
+  .dialog-inner { padding: 20px 22px; overflow-y: auto; max-height: 86vh; }
+  .dialog-inner h2 { font-size: 16px; text-transform: none; letter-spacing: 0; color: var(--text); margin-bottom: 4px; }
+  .dialog-inner .sub { font-size: 12px; color: var(--text-dim); margin-bottom: 16px; }
+  .code-block { margin-bottom: 18px; }
+  .code-block .code-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .code-block .filename { font-size: 11px; color: var(--accent); font-family: ui-monospace, monospace; }
+  .code-block pre {
+    margin: 0;
+    background: #0a0a10;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    overflow-x: auto;
+    font-size: 11.5px;
+    line-height: 1.5;
+  }
+  .code-block code { font-family: ui-monospace, "SF Mono", Menlo, monospace; white-space: pre; }
+  .dialog-close { display: block; margin: 4px 0 0 auto; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>TinyTracer Shape Editor</h1>
+  <p>Stack spheres, cubes &amp; pyramids into a custom model, then export it.</p>
+  <div class="spacer"></div>
+  <label>Model name
+    <input type="text" id="model-name" placeholder="Snowman" value="CustomModel" />
+  </label>
+  <button class="primary-btn" id="export-btn">Export →</button>
+</header>
+
+<div class="main">
+  <aside class="palette">
+    <h2>Add Shape</h2>
+    <button class="add-btn" data-type="Sphere">
+      <span class="swatch" style="background:#8cb4d9"></span> Sphere
+    </button>
+    <button class="add-btn" data-type="Cube">
+      <span class="swatch" style="background:#dcb965"></span> Cube
+    </button>
+    <button class="add-btn" data-type="Pyramid">
+      <span class="swatch" style="background:#e0a3ac"></span> Pyramid
+    </button>
+
+    <h2 class="spaced">Shapes</h2>
+    <ul id="shape-list"></ul>
+    <p class="empty-hint" id="list-empty-hint">Nothing added yet.</p>
+
+    <button class="ghost-btn" id="clear-btn" style="margin-top:14px; width:100%;">Clear all</button>
+  </aside>
+
+  <div id="viewport">
+    <div class="hint">Click a shape to select · drag the gizmo to stack it · Delete/Backspace to remove</div>
+  </div>
+
+  <aside class="inspector" id="inspector">
+    <h2>Inspector</h2>
+    <p class="empty-hint">Select a shape to edit its properties.</p>
+  </aside>
+</div>
+
+<dialog id="export-dialog">
+  <div class="dialog-inner">
+    <h2 id="export-title">Export CustomModel</h2>
+    <p class="sub">Save these as files in <code>components/PathTracerSandbox/objects/</code>, then paste the usage snippet into <code>useThreeScene.ts</code>.</p>
+
+    <div id="export-body"></div>
+
+    <button class="ghost-btn dialog-close" id="close-dialog-btn">Close</button>
+  </div>
+</dialog>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.185.1/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.185.1/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { TransformControls } from "three/addons/controls/TransformControls.js";
+
+// ─── Constants (mirrors components/PathTracerSandbox/objects/*.ts) ─────────
+
+const DEFAULT_ROUGHNESS = 0.2;
+const DEFAULT_METALNESS = 0.6;
+const DEFAULT_COLOR = { Sphere: "#8cb4d9", Cube: "#dcb965", Pyramid: "#e0a3ac" };
+
+// ─── Three.js scene setup ────────────────────────────────────────────────
+
+const viewport = document.getElementById("viewport");
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+viewport.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x12121a);
+scene.fog = new THREE.Fog(0x12121a, 20, 50);
+
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+camera.position.set(5, 4, 6);
+
+const ambientLight = new THREE.AmbientLight(0xc8c0e8, 0.6);
+scene.add(ambientLight);
+
+const dirLight = new THREE.DirectionalLight(0xfff4e6, 1.8);
+dirLight.position.set(5, 8, 4);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.set(2048, 2048);
+scene.add(dirLight);
+
+const fillLight = new THREE.DirectionalLight(0xa5b4fc, 0.4);
+fillLight.position.set(-4, 3, -2);
+scene.add(fillLight);
+
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(30, 30),
+  new THREE.MeshStandardMaterial({ color: 0x1a1a2e, roughness: 0.85, metalness: 0.1 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const grid = new THREE.GridHelper(30, 30, 0x2a2a4a, 0x1e1e38);
+grid.position.y = 0.005;
+scene.add(grid);
+
+const orbitControls = new OrbitControls(camera, renderer.domElement);
+orbitControls.enableDamping = true;
+orbitControls.dampingFactor = 0.08;
+orbitControls.target.set(0, 0.5, 0);
+
+const transformControls = new TransformControls(camera, renderer.domElement);
+transformControls.setMode("translate");
+scene.add(transformControls.getHelper());
+transformControls.addEventListener("dragging-changed", (e) => {
+  orbitControls.enabled = !e.value;
+});
+
+function resize() {
+  const w = viewport.clientWidth;
+  const h = viewport.clientHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+}
+window.addEventListener("resize", resize);
+resize();
+
+(function animate() {
+  requestAnimationFrame(animate);
+  orbitControls.update();
+  renderer.render(scene, camera);
+})();
+
+// ─── Shape state ─────────────────────────────────────────────────────────
+
+let nextId = 1;
+let selectedId = null;
+const shapes = [];
+
+function buildMesh(shape) {
+  let geometry;
+  if (shape.type === "Sphere") {
+    geometry = new THREE.SphereGeometry(shape.radius, 64, 64);
+  } else if (shape.type === "Cube") {
+    geometry = new THREE.BoxGeometry(shape.size, shape.size, shape.size);
+  } else {
+    geometry = new THREE.ConeGeometry(shape.radius, shape.height, 4);
+  }
+  const material = new THREE.MeshStandardMaterial({
+    color: shape.color,
+    roughness: shape.roughness,
+    metalness: shape.metalness,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(shape.position[0], shape.position[1], shape.position[2]);
+  if (shape.type === "Pyramid") mesh.rotation.y = Math.PI / 4;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.userData.shapeId = shape.id;
+  return mesh;
+}
+
+function refreshMesh(shape) {
+  const wasSelected = selectedId === shape.id;
+  scene.remove(shape.mesh);
+  shape.mesh.geometry.dispose();
+  shape.mesh.material.dispose();
+  shape.mesh = buildMesh(shape);
+  scene.add(shape.mesh);
+  if (wasSelected) transformControls.attach(shape.mesh);
+}
+
+function addShape(type) {
+  const id = nextId++;
+  const shape = {
+    id,
+    type,
+    color: DEFAULT_COLOR[type],
+    roughness: DEFAULT_ROUGHNESS,
+    metalness: DEFAULT_METALNESS,
+    position: [0, 0.5, 0],
+  };
+  if (type === "Sphere") shape.radius = 0.5;
+  else if (type === "Cube") shape.size = 1;
+  else { shape.radius = 0.6; shape.height = 1; }
+
+  shape.mesh = buildMesh(shape);
+  scene.add(shape.mesh);
+  shapes.push(shape);
+  renderShapeList();
+  selectShape(id);
+}
+
+function duplicateShape(id) {
+  const original = shapes.find((s) => s.id === id);
+  if (!original) return;
+  const copy = { ...original, id: nextId++ };
+  copy.position = [original.position[0] + 0.4, original.position[1], original.position[2] + 0.4];
+  delete copy.mesh;
+  copy.mesh = buildMesh(copy);
+  scene.add(copy.mesh);
+  shapes.push(copy);
+  renderShapeList();
+  selectShape(copy.id);
+}
+
+function deleteShape(id) {
+  const idx = shapes.findIndex((s) => s.id === id);
+  if (idx === -1) return;
+  const shape = shapes[idx];
+  if (selectedId === id) {
+    transformControls.detach();
+    selectedId = null;
+  }
+  scene.remove(shape.mesh);
+  shape.mesh.geometry.dispose();
+  shape.mesh.material.dispose();
+  shapes.splice(idx, 1);
+  renderShapeList();
+  renderInspector();
+}
+
+function clearAll() {
+  transformControls.detach();
+  selectedId = null;
+  shapes.forEach((s) => {
+    scene.remove(s.mesh);
+    s.mesh.geometry.dispose();
+    s.mesh.material.dispose();
+  });
+  shapes.length = 0;
+  renderShapeList();
+  renderInspector();
+}
+
+function selectShape(id) {
+  selectedId = id;
+  const shape = shapes.find((s) => s.id === id);
+  if (shape) transformControls.attach(shape.mesh);
+  else transformControls.detach();
+  renderShapeList();
+  renderInspector();
+}
+
+// ─── Shape list panel ────────────────────────────────────────────────────
+
+const shapeListEl = document.getElementById("shape-list");
+const listEmptyHint = document.getElementById("list-empty-hint");
+
+function shapeLabel(shape) {
+  const p = shape.position.map((n) => n.toFixed(1)).join(", ");
+  return `${shape.type} @ (${p})`;
+}
+
+function renderShapeList() {
+  shapeListEl.innerHTML = "";
+  listEmptyHint.style.display = shapes.length === 0 ? "block" : "none";
+  shapes.forEach((shape) => {
+    const li = document.createElement("li");
+    li.className = shape.id === selectedId ? "selected" : "";
+    li.addEventListener("click", () => selectShape(shape.id));
+
+    const label = document.createElement("span");
+    label.className = "label";
+    label.textContent = shapeLabel(shape);
+    li.appendChild(label);
+
+    const dupBtn = document.createElement("button");
+    dupBtn.textContent = "⧉";
+    dupBtn.title = "Duplicate";
+    dupBtn.addEventListener("click", (e) => { e.stopPropagation(); duplicateShape(shape.id); });
+    li.appendChild(dupBtn);
+
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "×";
+    delBtn.title = "Delete";
+    delBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteShape(shape.id); });
+    li.appendChild(delBtn);
+
+    shapeListEl.appendChild(li);
+  });
+}
+
+// ─── Inspector panel ─────────────────────────────────────────────────────
+
+const inspectorEl = document.getElementById("inspector");
+
+function numberField(labelText, value, step, min, onChange) {
+  const wrap = document.createElement("div");
+  wrap.className = "field";
+  const label = document.createElement("label");
+  label.textContent = labelText;
+  const input = document.createElement("input");
+  input.type = "number";
+  input.step = step;
+  if (min !== undefined) input.min = min;
+  input.value = value;
+  input.addEventListener("input", () => onChange(parseFloat(input.value) || 0));
+  wrap.appendChild(label);
+  wrap.appendChild(input);
+  return wrap;
+}
+
+function renderInspector() {
+  inspectorEl.innerHTML = "";
+  const heading = document.createElement("h2");
+  heading.textContent = "Inspector";
+  inspectorEl.appendChild(heading);
+
+  const shape = shapes.find((s) => s.id === selectedId);
+  if (!shape) {
+    const hint = document.createElement("p");
+    hint.className = "empty-hint";
+    hint.textContent = "Select a shape to edit its properties.";
+    inspectorEl.appendChild(hint);
+    return;
+  }
+
+  const typeLabel = document.createElement("p");
+  typeLabel.className = "empty-hint";
+  typeLabel.style.marginBottom = "14px";
+  typeLabel.textContent = shape.type;
+  inspectorEl.appendChild(typeLabel);
+
+  // Position
+  const posLabel = document.createElement("label");
+  posLabel.textContent = "Position (X, Y, Z)";
+  posLabel.style.cssText = "display:block;font-size:11px;color:var(--text-dim);margin-bottom:4px;";
+  inspectorEl.appendChild(posLabel);
+
+  const posRow = document.createElement("div");
+  posRow.className = "row3";
+  ["X", "Y", "Z"].forEach((axis, i) => {
+    const input = document.createElement("input");
+    input.type = "number";
+    input.step = 0.1;
+    input.value = shape.position[i];
+    input.title = axis;
+    input.addEventListener("input", () => {
+      shape.position[i] = parseFloat(input.value) || 0;
+      shape.mesh.position.set(shape.position[0], shape.position[1], shape.position[2]);
+      renderShapeList();
+    });
+    posRow.appendChild(input);
+  });
+  inspectorEl.appendChild(posRow);
+  const spacer = document.createElement("div");
+  spacer.style.height = "12px";
+  inspectorEl.appendChild(spacer);
+
+  // Type-specific size fields
+  if (shape.type === "Sphere") {
+    inspectorEl.appendChild(numberField("Radius", shape.radius, 0.05, 0.05, (v) => {
+      shape.radius = Math.max(0.05, v);
+      refreshMesh(shape);
+      renderShapeList();
+    }));
+  } else if (shape.type === "Cube") {
+    inspectorEl.appendChild(numberField("Size", shape.size, 0.05, 0.05, (v) => {
+      shape.size = Math.max(0.05, v);
+      refreshMesh(shape);
+      renderShapeList();
+    }));
+  } else {
+    const row = document.createElement("div");
+    row.className = "row2";
+    row.appendChild(numberField("Radius", shape.radius, 0.05, 0.05, (v) => {
+      shape.radius = Math.max(0.05, v);
+      refreshMesh(shape);
+      renderShapeList();
+    }));
+    row.appendChild(numberField("Height", shape.height, 0.05, 0.05, (v) => {
+      shape.height = Math.max(0.05, v);
+      refreshMesh(shape);
+      renderShapeList();
+    }));
+    inspectorEl.appendChild(row);
+  }
+
+  // Color
+  const colorWrap = document.createElement("div");
+  colorWrap.className = "field";
+  const colorLabel = document.createElement("label");
+  colorLabel.textContent = "Color";
+  const colorInput = document.createElement("input");
+  colorInput.type = "color";
+  colorInput.value = shape.color;
+  colorInput.addEventListener("input", () => {
+    shape.color = colorInput.value;
+    refreshMesh(shape);
+  });
+  colorWrap.appendChild(colorLabel);
+  colorWrap.appendChild(colorInput);
+  inspectorEl.appendChild(colorWrap);
+
+  // Roughness / Metalness
+  const matRow = document.createElement("div");
+  matRow.className = "row2";
+  matRow.appendChild(numberField("Roughness", shape.roughness, 0.01, 0, (v) => {
+    shape.roughness = Math.min(1, Math.max(0, v));
+    refreshMesh(shape);
+  }));
+  matRow.appendChild(numberField("Metalness", shape.metalness, 0.01, 0, (v) => {
+    shape.metalness = Math.min(1, Math.max(0, v));
+    refreshMesh(shape);
+  }));
+  inspectorEl.appendChild(matRow);
+
+  const actions = document.createElement("div");
+  actions.className = "inspector-actions";
+  const dupBtn = document.createElement("button");
+  dupBtn.className = "ghost-btn";
+  dupBtn.textContent = "Duplicate";
+  dupBtn.addEventListener("click", () => duplicateShape(shape.id));
+  const delBtn = document.createElement("button");
+  delBtn.className = "ghost-btn";
+  delBtn.textContent = "Delete";
+  delBtn.addEventListener("click", () => deleteShape(shape.id));
+  actions.appendChild(dupBtn);
+  actions.appendChild(delBtn);
+  inspectorEl.appendChild(actions);
+}
+
+renderShapeList();
+renderInspector();
+
+// ─── Palette + toolbar wiring ────────────────────────────────────────────
+
+document.querySelectorAll(".add-btn").forEach((btn) => {
+  btn.addEventListener("click", () => addShape(btn.dataset.type));
+});
+document.getElementById("clear-btn").addEventListener("click", () => {
+  if (shapes.length === 0) return;
+  if (confirm("Remove all shapes?")) clearAll();
+});
+
+// ─── Viewport selection raycasting ───────────────────────────────────────
+
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+
+renderer.domElement.addEventListener("pointerdown", (event) => {
+  if (transformControls.dragging) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+
+  const hits = raycaster.intersectObjects(shapes.map((s) => s.mesh), false);
+  if (hits.length > 0) {
+    const hit = hits[0].object;
+    selectShape(hit.userData.shapeId);
+  } else {
+    selectShape(null);
+  }
+});
+
+transformControls.addEventListener("objectChange", () => {
+  const shape = shapes.find((s) => s.id === selectedId);
+  if (!shape) return;
+  shape.position = [shape.mesh.position.x, shape.mesh.position.y, shape.mesh.position.z];
+  renderInspector();
+});
+
+window.addEventListener("keydown", (e) => {
+  if (document.activeElement && document.activeElement.tagName === "INPUT") return;
+  if ((e.key === "Delete" || e.key === "Backspace") && selectedId !== null) {
+    deleteShape(selectedId);
+  }
+});
+
+// ─── Code generation ──────────────────────────────────────────────────────
+
+function toPascalCase(str) {
+  const words = str.replace(/[^a-zA-Z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+  const pascal = words.map((w) => w[0].toUpperCase() + w.slice(1)).join("");
+  return pascal || "CustomModel";
+}
+
+function toScreamingSnake(pascal) {
+  return pascal.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase();
+}
+
+function fmt(n) {
+  const num = Number(n);
+  if (Number.isInteger(num)) return String(num);
+  return String(Math.round(num * 1000) / 1000);
+}
+
+function toHexLiteral(cssColor) {
+  return "0x" + cssColor.replace("#", "").toLowerCase();
+}
+
+function escapeHtml(str) {
+  return str.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+function generateClassCode(className, shapeList) {
+  const usedTypes = [...new Set(shapeList.map((s) => s.type))];
+  const imports = usedTypes.map((t) => `import { ${t} } from "./${t}";`).join("\n");
+
+  const adds = shapeList.map((s) => {
+    const fields = [`position: [${fmt(s.position[0])}, ${fmt(s.position[1])}, ${fmt(s.position[2])}] as const`];
+    if (s.type === "Sphere") fields.push(`radius: ${fmt(s.radius)}`);
+    if (s.type === "Cube") fields.push(`size: ${fmt(s.size)}`);
+    if (s.type === "Pyramid") { fields.push(`radius: ${fmt(s.radius)}`); fields.push(`height: ${fmt(s.height)}`); }
+    fields.push(`color: ${toHexLiteral(s.color)}`);
+    if (Math.abs(s.roughness - DEFAULT_ROUGHNESS) > 1e-6) fields.push(`roughness: ${fmt(s.roughness)}`);
+    if (Math.abs(s.metalness - DEFAULT_METALNESS) > 1e-6) fields.push(`metalness: ${fmt(s.metalness)}`);
+    return `    this.add(new ${s.type}({ ${fields.join(", ")} }));`;
+  }).join("\n");
+
+  return [
+    `import * as THREE from "three";`,
+    imports,
+    ``,
+    `export interface ${className}Config {`,
+    `  position: readonly [number, number, number];`,
+    `  name?: string;`,
+    `}`,
+    ``,
+    `/** A composite model built from stacked primitives (generated by the shape editor). */`,
+    `export class ${className} extends THREE.Group {`,
+    `  constructor({ position, name }: ${className}Config) {`,
+    `    super();`,
+    ``,
+    adds,
+    ``,
+    `    this.position.set(...position);`,
+    `    if (name) this.name = name;`,
+    `  }`,
+    `}`,
+    ``,
+  ].join("\n");
+}
+
+function generateFactoryCode(className, worldPosition) {
+  const snake = toScreamingSnake(className);
+  const nameExpr = "`" + className + " ${i + 1}`";
+  return [
+    `import { ${className} } from "./${className}";`,
+    ``,
+    `const ${snake}_CONFIGS = [`,
+    `  { position: [${fmt(worldPosition[0])}, ${fmt(worldPosition[1])}, ${fmt(worldPosition[2])}] as const },`,
+    `];`,
+    ``,
+    `/** Builds the sandbox's default ${className} set. */`,
+    `export function createScene${className}s(): ${className}[] {`,
+    `  return ${snake}_CONFIGS.map(`,
+    `    (config, i) => new ${className}({ ...config, name: ${nameExpr} })`,
+    `  );`,
+    `}`,
+    ``,
+  ].join("\n");
+}
+
+function generateUsageSnippet(className) {
+  return [
+    `import { createScene${className}s } from "../objects/scene${className}s";`,
+    ``,
+    `createScene${className}s().forEach((instance) => {`,
+    `  scene.add(instance);`,
+    `  instance.children.forEach((child) => {`,
+    `    if (child instanceof THREE.Mesh) selectables.push(child);`,
+    `  });`,
+    `});`,
+    ``,
+  ].join("\n");
+}
+
+// ─── Export dialog ────────────────────────────────────────────────────────
+
+const dialog = document.getElementById("export-dialog");
+const exportTitle = document.getElementById("export-title");
+const exportBody = document.getElementById("export-body");
+
+function makeCodeBlock(filenameOrLabel, code) {
+  const block = document.createElement("div");
+  block.className = "code-block";
+
+  const head = document.createElement("div");
+  head.className = "code-head";
+  const fn = document.createElement("span");
+  fn.className = "filename";
+  fn.textContent = filenameOrLabel;
+  const copyBtn = document.createElement("button");
+  copyBtn.className = "ghost-btn";
+  copyBtn.textContent = "Copy";
+  copyBtn.addEventListener("click", () => {
+    navigator.clipboard.writeText(code).then(() => {
+      copyBtn.textContent = "Copied!";
+      setTimeout(() => (copyBtn.textContent = "Copy"), 1200);
+    });
+  });
+  head.appendChild(fn);
+  head.appendChild(copyBtn);
+
+  const pre = document.createElement("pre");
+  const codeEl = document.createElement("code");
+  codeEl.innerHTML = escapeHtml(code);
+  pre.appendChild(codeEl);
+
+  block.appendChild(head);
+  block.appendChild(pre);
+  return block;
+}
+
+document.getElementById("export-btn").addEventListener("click", () => {
+  if (shapes.length === 0) {
+    alert("Add at least one shape before exporting.");
+    return;
+  }
+  const className = toPascalCase(document.getElementById("model-name").value);
+  const worldPosition = [0, 0, 0];
+
+  const classCode = generateClassCode(className, shapes);
+  const factoryCode = generateFactoryCode(className, worldPosition);
+  const usageCode = generateUsageSnippet(className);
+
+  exportTitle.textContent = `Export ${className}`;
+  exportBody.innerHTML = "";
+  exportBody.appendChild(makeCodeBlock(`objects/${className}.ts`, classCode));
+  exportBody.appendChild(makeCodeBlock(`objects/scene${className}s.ts`, factoryCode));
+  exportBody.appendChild(makeCodeBlock(`paste into hooks/useThreeScene.ts`, usageCode));
+
+  dialog.showModal();
+});
+
+document.getElementById("close-dialog-btn").addEventListener("click", () => dialog.close());
+</script>
+</body>
+</html>
