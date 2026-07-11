@@ -4,7 +4,7 @@ import { BrandButton } from "@/components/BrandButton";
 
 export default function Home() {
   return (
-    <main className="relative flex-1 flex flex-col items-center justify-center gap-12 px-6 pb-20 sm:pb-32">
+    <main className="relative flex-1 flex flex-col items-center justify-center gap-12 px-6 pb-20 sm:pb-32 overflow-y-auto">
       <DayNightBackground />
 
       <div className="absolute top-5 left-5 z-10">
