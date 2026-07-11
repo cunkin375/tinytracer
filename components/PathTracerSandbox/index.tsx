@@ -15,6 +15,7 @@ import { usePathTracer } from "./hooks/usePathTracer";
 import { TopBar } from "./components/TopBar";
 import { LeftPanel } from "./components/LeftPanel";
 import { SunPanel } from "./components/SunPanel";
+import { EnergyStatsPanel } from "./components/EnergyStatsPanel";
 import { BottomStatusBar } from "./components/BottomStatusBar";
 import { PathTracerOutput } from "./components/PathTracerOutput";
 import { applySunSettings, DEFAULT_SUN } from "./sun";
@@ -129,6 +130,8 @@ export default function PathTracerSandbox() {
           onChange={setSun}
         />
       )}
+
+      {isTracing && !isInitializing && !error && <EnergyStatsPanel />}
 
       <BottomStatusBar
         cameraMode={cameraMode}
