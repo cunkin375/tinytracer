@@ -79,9 +79,8 @@ function isTracedSphere(obj: THREE.Object3D): obj is THREE.Mesh {
  * (see {@link serializeSpheres}); everything else in the scene (ground plane,
  * transform gizmo, grid, lights) is skipped so it never leaks into the image.
  */
-function isTriangleTraceable(geometry: THREE.BufferGeometry): boolean {
-  const t = geometry.type;
-  return t === "BoxGeometry" || t === "ConeGeometry";
+function isTriangleTraceable(mesh: THREE.Mesh): boolean {
+  return mesh.userData.isTraceable === true;
 }
 
 /**
@@ -201,7 +200,7 @@ export function serializeTriangles(scene: THREE.Scene): { triangleData: Float32A
 
   const meshes: THREE.Mesh[] = [];
   scene.traverse((obj) => {
-    if (obj instanceof THREE.Mesh && isTriangleTraceable(obj.geometry)) {
+    if (obj instanceof THREE.Mesh && isTriangleTraceable(obj)) {
       meshes.push(obj);
     }
   });

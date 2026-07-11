@@ -47,6 +47,7 @@ export class Cube extends THREE.Mesh<
     this.position.set(...position);
     this.castShadow = true;
     this.receiveShadow = true;
+    this.userData.isTraceable = true;
     if (name) this.name = name;
   }
 }
