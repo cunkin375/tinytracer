@@ -6,7 +6,6 @@ import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { DEFAULT_TREE_COUNT, ORTHO_FRUSTUM_SIZE } from "../constants";
 import { createSkybox, preloadSkyboxTexture } from "../objects/Skybox";
-import { fitSkyboxToTerrain, snapObjectToTerrain } from "../objects/terrain";
 import type { CameraMode, SceneRefs } from "../types";
 
 /**
@@ -68,7 +67,7 @@ export function useThreeScene(
       // gets clipped as the camera orbits.
 
       const perspCamera = new THREE.PerspectiveCamera(50, aspect, 0.1, 200);
-      perspCamera.position.set(6, 5, 8);
+      perspCamera.position.set(22, 16, 28);
       perspCamera.lookAt(0, 0, 0);
 
       const orthoHalfH = ORTHO_FRUSTUM_SIZE / 2;
@@ -81,19 +80,19 @@ export function useThreeScene(
         0.1,
         200
       );
-      orthoCamera.position.set(0, 0, 15); // default: front view
+      orthoCamera.position.set(0, 0, 45); // default: front view
       orthoCamera.lookAt(0, 0, 0);
 
       // Created early (rest of the orbit/transform control wiring is further
-      // down, with the rest of ── Controls ──) because the terrain registry
-      // below needs it immediately: clamping how far the camera can climb
-      // is part of keeping the skybox from ever showing its open top/bottom.
+      // down, with the rest of ── Controls ──) because the polar-angle clamp
+      // below needs it immediately. minDistance keeps the camera outside the
+      // Earth sphere (radius 15); maxDistance keeps it inside the skybox.
       const orbitControls = new OrbitControls(perspCamera, renderer.domElement);
       orbitControls.enableDamping = true;
       orbitControls.dampingFactor = 0.08;
-      orbitControls.minDistance = 2;
-      orbitControls.maxDistance = 30;
-      orbitControls.target.set(0, 1, 0);
+      orbitControls.minDistance = 18;
+      orbitControls.maxDistance = 70;
+      orbitControls.target.set(0, 0, 0);
 
       // ── Lighting ─────────────────────────────────────────────────────────
 
@@ -119,48 +118,60 @@ export function useThreeScene(
       scene.add(dirLight);
       scene.add(dirLight.target);
 
+      // Visible sun proxy: a glowing disc that marks where the directional
+      // light sits so the user can see the sun they're steering with the Sun
+      // panel. Parented to the light so it tracks its position for free, and
+      // left untagged (no isSphere / isTraceable) so it never leaks into the
+      // path-traced image. MeshBasicMaterial is unlit, so it reads as a
+      // self-luminous sun rather than a shaded ball.
+      const sunCore = new THREE.Mesh(
+        new THREE.SphereGeometry(0.55, 24, 16),
+        new THREE.MeshBasicMaterial({ color: 0xfff4e6 })
+      );
+      sunCore.userData.isSunProxy = true;
+      const sunGlow = new THREE.Mesh(
+        new THREE.SphereGeometry(1.1, 24, 16),
+        new THREE.MeshBasicMaterial({
+          color: 0xfff4e6,
+          transparent: true,
+          opacity: 0.22,
+          side: THREE.BackSide,
+          depthWrite: false,
+        })
+      );
+      sunCore.add(sunGlow);
+      dirLight.add(sunCore);
+
       const fillLight = new THREE.DirectionalLight(0xa5b4fc, 0.4);
       fillLight.position.set(-4, 3, -2);
       scene.add(fillLight);
 
-      // ── Ground Plane ─────────────────────────────────────────────────────
-      // Doubles as a backstop for the terrain case: registerTerrain (below)
-      // hides the grid lines and drops this plane below the terrain's
-      // lowest point, so any camera ray that misses both the terrain and
-      // the (open-ended, capless) skybox still lands on *something* instead
-      // of the raw scene background — that gap was the "black void"/fog
-      // look, not literal fog.
+      // ── Earth ────────────────────────────────────────────────────────────
+      // A single central sphere at the origin that everything else sits on.
+      // It is deliberately kept out of `selectables`, so it can never be
+      // picked up by the transform controls — it stays locked in place.
 
-      const groundGeo = new THREE.PlaneGeometry(200, 200);
-      const groundMat = new THREE.MeshStandardMaterial({
-        color: 0x1a1a2e,
+      const EARTH_RADIUS = 15;
+      const earthGeo = new THREE.SphereGeometry(EARTH_RADIUS, 64, 64);
+      const earthMat = new THREE.MeshStandardMaterial({
+        color: 0x2EDB6D,
         roughness: 0.85,
         metalness: 0.1,
       });
-      const ground = new THREE.Mesh(groundGeo, groundMat);
-      ground.rotation.x = -Math.PI / 2;
-      ground.receiveShadow = true;
-      scene.add(ground);
-
-      const grid = new THREE.GridHelper(30, 30, 0x2a2a4a, 0x1e1e38);
-      grid.position.y = 0.005;
-      scene.add(grid);
-
-      // ── Terrain registry ─────────────────────────────────────────────────
-      // Objects can load in any order (Tree/Car/a Terrain all via async
-      // .load() calls). Whichever terrain shows up first snaps everything
-      // already registered onto its surface, levels/resizes the skybox, and
-      // drops the ground below it; anything registered afterward snaps
-      // immediately. `resnapAll` re-settles everyone if the terrain itself
-      // is later moved/rotated/scaled.
-
-      let terrainObject: THREE.Object3D | null = null;
-      const registeredObjects: THREE.Object3D[] = [];
-
-      const registerSceneObject = (object: THREE.Object3D) => {
-        registeredObjects.push(object);
-        if (terrainObject) snapObjectToTerrain(object, terrainObject);
-      };
+      const earth = new THREE.Mesh(earthGeo, earthMat);
+      earth.receiveShadow = true;
+      earth.castShadow = true;
+      // Consumed by the path-tracer serializer (see lib/webgpu/serializer.ts).
+      // Tagging it as an analytic sphere gets it traced exactly — and cheaply —
+      // as a (center, radius) primitive, rather than tessellating the 64×64
+      // sphere geometry into thousands of triangles. `isSphere`/`radius` are
+      // what serializeSpheres keys off of; without them the Earth is skipped
+      // entirely and never reaches the GPU.
+      earth.userData.isSphere = true;
+      earth.userData.radius = EARTH_RADIUS;
+      earth.userData.materialType = 0; // Lambertian
+      earth.userData.roughness = earthMat.roughness;
+      scene.add(earth);
 
       // The skybox is a full sphere (see Skybox.ts) with no open rim to see
       // past, so the camera is free to orbit almost the full polar range —
@@ -170,89 +181,68 @@ export function useThreeScene(
       orbitControls.minPolarAngle = 0.01;
       orbitControls.maxPolarAngle = Math.PI - 0.01;
 
-      const resnapAll = () => {
-        if (!terrainObject) return;
-        fitSkyboxToTerrain(skybox, terrainObject);
-        const bounds = new THREE.Box3().setFromObject(terrainObject);
-        ground.position.y = bounds.min.y - 0.1;
-        registeredObjects.forEach((object) => snapObjectToTerrain(object, terrainObject!));
-      };
-
-      const registerTerrain = (terrain: THREE.Object3D) => {
-        terrainObject = terrain;
-        grid.visible = false;
-        resnapAll();
-      };
-
       // ── Scene objects ────────────────────────────────────────────────────
 
       const selectables: THREE.Mesh[] = [];
 
       // ── Trees: count is set directly by the tree-count slider (React UI) ──
-      // via setTreeCount, not derived from the terrain's footprint —
-      // rebalanceTreeCount only adds/removes the difference between the
-      // current and target count, so trees that stay are never moved. Trees
-      // aren't in `selectables`: nothing in the main app is movable except a
-      // dropdown-added Car (see addCar below).
+      // via setTreeCount. Trees are scattered evenly over the Earth sphere's
+      // surface with a Fibonacci-sphere distribution and locked in place —
+      // they aren't in `selectables`, so nothing in the main app is movable
+      // except the solar panel (surface-locked, below) and a dropdown-added
+      // Car (see addCar below).
 
-      const TREE_MIN_DISTANCE = 2.0;
-      const MAX_PLACEMENT_ATTEMPTS = 300;
-      const FALLBACK_PLACEMENT_RADIUS = 6; // used before any terrain exists
+      const TREE_UP = new THREE.Vector3(0, 1, 0);
 
       let treeTemplate: THREE.Object3D | null = null;
       let treeCount = DEFAULT_TREE_COUNT;
-      const placedTrees: { object: THREE.Object3D; xz: THREE.Vector2 }[] = [];
+      const placedTrees: THREE.Object3D[] = [];
 
-      const currentPlacementRadius = () => {
-        if (!terrainObject) return FALLBACK_PLACEMENT_RADIUS;
-        const bounds = new THREE.Box3().setFromObject(terrainObject);
-        const size = new THREE.Vector3();
-        bounds.getSize(size);
-        return Math.max(size.x, size.z) / 2;
+      // The i-th of `count` evenly spread points on the unit sphere, scaled to
+      // the Earth's radius. The golden-angle spiral keeps neighbours roughly
+      // equidistant no matter how many points there are.
+      const fibonacciSpherePoint = (i: number, count: number) => {
+        const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+        // y walks evenly from just below the north pole to just above the
+        // south pole; the (i + 0.5)/count offset keeps points off the exact
+        // poles where the spiral degenerates.
+        const y = 1 - (2 * (i + 0.5)) / count;
+        const ringRadius = Math.sqrt(Math.max(0, 1 - y * y));
+        const theta = goldenAngle * i;
+        return new THREE.Vector3(
+          Math.cos(theta) * ringRadius,
+          y,
+          Math.sin(theta) * ringRadius
+        ).multiplyScalar(EARTH_RADIUS);
       };
 
-      const placeTree = (xz: THREE.Vector2) => {
-        if (!treeTemplate) return;
-        const tree = treeTemplate.clone(true);
-        tree.position.set(xz.x, 0, xz.y);
-        scene.add(tree);
-        registerSceneObject(tree);
-        placedTrees.push({ object: tree, xz });
+      // Places a tree at its Fibonacci-sphere slot, rooted on the surface and
+      // rotated so its local +Y (trunk-up) points straight out from the
+      // Earth's centre.
+      const placeTree = (tree: THREE.Object3D, i: number, count: number) => {
+        const position = fibonacciSpherePoint(i, count);
+        tree.position.copy(position);
+        tree.quaternion.setFromUnitVectors(TREE_UP, position.clone().normalize());
       };
 
-      const removeTree = (entry: { object: THREE.Object3D; xz: THREE.Vector2 }) => {
-        scene.remove(entry.object);
-        const registeredIdx = registeredObjects.indexOf(entry.object);
-        if (registeredIdx !== -1) registeredObjects.splice(registeredIdx, 1);
-        const placedIdx = placedTrees.indexOf(entry);
-        if (placedIdx !== -1) placedTrees.splice(placedIdx, 1);
-      };
-
-      // Adds/removes trees to match `treeCount`. Trees that are kept are
-      // never moved — only the count changes.
+      // Adds/removes trees to match `treeCount`, then re-spreads all of them
+      // across the sphere for the new total (an even distribution depends on
+      // the count, so surviving trees may shift slots).
       const rebalanceTreeCount = () => {
         if (!treeTemplate) return;
         const target = treeCount;
 
         while (placedTrees.length > target) {
-          removeTree(placedTrees[placedTrees.length - 1]);
+          const tree = placedTrees.pop();
+          if (tree) scene.remove(tree);
+        }
+        while (placedTrees.length < target) {
+          const tree = treeTemplate.clone(true);
+          scene.add(tree);
+          placedTrees.push(tree);
         }
 
-        const radius = currentPlacementRadius();
-        let attempts = 0;
-        while (placedTrees.length < target && attempts < MAX_PLACEMENT_ATTEMPTS) {
-          attempts++;
-          const candidate = new THREE.Vector2(
-            (Math.random() * 2 - 1) * radius,
-            (Math.random() * 2 - 1) * radius
-          );
-          if (candidate.length() > radius) continue;
-          const overlaps = placedTrees.some(
-            (t) => t.xz.distanceTo(candidate) < TREE_MIN_DISTANCE
-          );
-          if (overlaps) continue;
-          placeTree(candidate);
-        }
+        placedTrees.forEach((tree, i) => placeTree(tree, i, placedTrees.length));
       };
 
       const setTreeCount = (count: number) => {
@@ -279,9 +269,9 @@ export function useThreeScene(
       });
 
       // Car is not auto-loaded — it's only added on demand via the "Add Car"
-      // dropdown (see addCar, exposed on sceneRef below), and is the only
-      // object type in the main app that ends up in `selectables`: everything
-      // else (terrain, trees, the solar panel) is locked down/unselectable.
+      // dropdown (see addCar, exposed on sceneRef below). Along with the
+      // solar panel it's one of the only objects in the main app that ends up
+      // in `selectables`: the Earth and trees are locked down/unselectable.
       const addCar = () => {
         new OBJLoader().load("/models/Car.obj", (object) => {
           const material = new THREE.MeshStandardMaterial({
@@ -289,10 +279,6 @@ export function useThreeScene(
             roughness: 0.2,
             metalness: 0.6,
           });
-          // Rest the model's bottom on the floor regardless of how it was
-          // positioned in the editor.
-          const bounds = new THREE.Box3().setFromObject(object);
-          object.position.y -= bounds.min.y;
           scene.add(object);
           object.traverse((child) => {
             if (child instanceof THREE.Mesh) {
@@ -303,82 +289,35 @@ export function useThreeScene(
               selectables.push(child);
             }
           });
-          registerSceneObject(object);
         });
       };
 
+      // The solar panel is the one object the user is meant to reposition. Its
+      // meshes go into `selectables` and are tagged so the transform-controls
+      // "change" handler (below) can recognise them and keep them clamped to
+      // the Earth's surface. It starts resting on the north pole.
       new OBJLoader().load("/models/SolarPannel.obj", (object) => {
         const material = new THREE.MeshStandardMaterial({
           vertexColors: true,
           roughness: 0.36,
           metalness: 0.78,
         });
-        // Rest the model's bottom on the floor regardless of how it was
-        // positioned in the editor.
-        const bounds = new THREE.Box3().setFromObject(object);
-        object.position.y -= bounds.min.y;
+        // Keep the loaded group at the origin with an identity transform so
+        // that the selectable child mesh's local position is also its world
+        // position — the "change" handler below clamps that position directly.
         scene.add(object);
         object.traverse((child) => {
           if (child instanceof THREE.Mesh) {
             child.material = material;
             child.castShadow = true;
             child.receiveShadow = true;
+            child.userData.isSolarPanel = true;
+            child.userData.isTraceable = true;
+            child.position.set(0, EARTH_RADIUS, 0);
+            selectables.push(child);
           }
         });
-        // Snap onto the terrain if one's already loaded, or queue to snap
-        // onto it once one arrives.
-        registerSceneObject(object);
       });
-
-
-      new OBJLoader().load("/models/Terrain.obj", (object) => {
-        const material = new THREE.MeshStandardMaterial({
-          vertexColors: true,
-          roughness: 0.20,
-          metalness: 0.60,
-        });
-        // Rest the model's bottom on the floor regardless of how it was
-        // positioned in the editor.
-        const bounds = new THREE.Box3().setFromObject(object);
-        object.position.y -= bounds.min.y;
-        scene.add(object);
-        object.traverse((child) => {
-          if (child instanceof THREE.Mesh) {
-            child.material = material;
-            child.castShadow = true;
-            child.receiveShadow = true;
-          }
-        });
-        // Level the skybox with this terrain and drop every object already
-        // in the scene onto its surface so nothing clips underneath it.
-        registerTerrain(object);
-      });
-
-
-      // new OBJLoader().load("/models/Terrain.obj", (object) => {
-      //   const material = new THREE.MeshStandardMaterial({
-      //     vertexColors: true,
-      //     roughness: 0.2,
-      //     metalness: 0.6,
-      //   });
-      //   // Rest the model's bottom on the floor regardless of how it was
-      //   // positioned in the editor.
-      //   const bounds = new THREE.Box3().setFromObject(object);
-      //   object.position.y -= bounds.min.y;
-      //   scene.add(object);
-      //   object.traverse((child) => {
-      //     if (child instanceof THREE.Mesh) {
-      //       child.material = material;
-      //       child.castShadow = true;
-      //       child.receiveShadow = true;
-      //       selectables.push(child);
-      //     }
-      //   });
-      //   // Level/resize the skybox to this terrain, drop the ground below
-      //   // it, and settle every object already in the scene onto its
-      //   // surface so nothing clips underneath it.
-      //   registerTerrain(object);
-      // });
 
       // ── Controls ─────────────────────────────────────────────────────────
 
@@ -393,15 +332,21 @@ export function useThreeScene(
         orbitControls.enabled = !event.value;
       });
 
-      // Keeps guarantee 8 (nothing floats/clips) true even after the user
-      // drags the Car — the only object that's ever attached to
-      // transformControls in the main app, since terrain/trees/the solar
-      // panel aren't in `selectables` and so can never be picked up here.
-      transformControls.addEventListener("dragging-changed", (event) => {
-        if (event.value || !terrainObject) return;
+      // Surface-lock for the solar panel. TransformControls fires "change" on
+      // every drag step; whenever the attached object is the solar panel, we
+      // re-project it onto the Earth's surface (radius EARTH_RADIUS) and
+      // re-orient it so its local +Y keeps pointing straight out from the
+      // centre. The Car, the only other selectable, is left free to move.
+      const SOLAR_UP = new THREE.Vector3(0, 1, 0);
+      transformControls.addEventListener("change", () => {
         const target = transformControls.object;
-        if (!target) return;
-        snapObjectToTerrain(target, terrainObject);
+        if (!target || !target.userData.isSolarPanel) return;
+        if (target.position.lengthSq() === 0) return; // avoid NaN at the centre
+        target.position.normalize().multiplyScalar(EARTH_RADIUS);
+        target.quaternion.setFromUnitVectors(
+          SOLAR_UP,
+          target.position.clone().normalize()
+        );
       });
 
       // ── Raycaster for selection ─────────────────────────────────────────
