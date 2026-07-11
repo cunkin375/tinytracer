@@ -332,17 +332,103 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 const DEFAULT_ROUGHNESS = 0.2;
 const DEFAULT_METALNESS = 0.6;
-const DEFAULT_COLOR = { Sphere: "#8cb4d9", Cube: "#dcb965", Pyramid: "#e0a3ac", Terrain: "#6b8f5c" };
+const DEFAULT_COLOR = { Sphere: "#8cb4d9", Cube: "#dcb965", Pyramid: "#e0a3ac" };
+const TERRAIN_DEFAULT_GRADIENT = { low: "#4a6b3f", high: "#cfe8b8" };
 
-// Chunky by default (see Triangle Size in the inspector): a small segment
-// count means big, flat-shaded triangles for a PS1-style low-poly terrain
-// instead of a smooth continuous surface.
-const TERRAIN_SIZE = 8;
+// Chunky by default (see Triangle Size in the inspector): a small ring/
+// radial-segment count means big, flat-shaded triangles for a PS1-style
+// low-poly terrain instead of a smooth continuous surface.
+const TERRAIN_RADIUS = 4;
 const TERRAIN_DEFAULT_TRIANGLE_SIZE = 1;
 const TERRAIN_HEIGHT_LIMIT = 8;
+const TERRAIN_MIN_RADIAL_SEGMENTS = 8;
 
-function terrainSegmentsForTriangleSize(triangleSize) {
-  return Math.max(1, Math.round(TERRAIN_SIZE / triangleSize));
+// Rings step inward from the outer radius at ~triangleSize spacing; radial
+// segment count is picked so the outermost ring's triangles have about the
+// same edge length as that radial spacing, keeping triangles roughly even
+// no matter how chunky/fine triangleSize is.
+function terrainRingsForTriangleSize(triangleSize) {
+  return Math.max(1, Math.round(TERRAIN_RADIUS / triangleSize));
+}
+function terrainRadialSegmentsForTriangleSize(triangleSize) {
+  const rings = terrainRingsForTriangleSize(triangleSize);
+  return Math.max(TERRAIN_MIN_RADIAL_SEGMENTS, Math.round(rings * Math.PI * 2));
+}
+function terrainVertexCount(rings, radialSegments) {
+  return 1 + rings * radialSegments;
+}
+
+// Builds a concentric-ring circular grid: one center vertex, then `rings`
+// rings of `radialSegments` vertices each, fanned from the center and
+// quad-stitched (as two triangles) between adjacent rings. Vertex order is
+// [center, ring1..., ring2..., ...] — `shape.heights` is indexed the same
+// way, and sculpting/gradient code below relies on that alignment.
+function buildCircularTerrainGeometry(shape) {
+  const { radius, rings, radialSegments, heights } = shape;
+  const positions = new Float32Array(terrainVertexCount(rings, radialSegments) * 3);
+
+  positions[1] = heights[0] ?? 0;
+  for (let r = 1; r <= rings; r++) {
+    const ringRadius = (r / rings) * radius;
+    for (let s = 0; s < radialSegments; s++) {
+      const theta = (s / radialSegments) * Math.PI * 2;
+      const idx = 1 + (r - 1) * radialSegments + s;
+      positions[idx * 3] = Math.cos(theta) * ringRadius;
+      positions[idx * 3 + 1] = heights[idx] ?? 0;
+      positions[idx * 3 + 2] = Math.sin(theta) * ringRadius;
+    }
+  }
+
+  const indices = [];
+  for (let s = 0; s < radialSegments; s++) {
+    indices.push(0, 1 + s, 1 + ((s + 1) % radialSegments));
+  }
+  for (let r = 1; r < rings; r++) {
+    const ringStart = 1 + (r - 1) * radialSegments;
+    const nextRingStart = 1 + r * radialSegments;
+    for (let s = 0; s < radialSegments; s++) {
+      const s2 = (s + 1) % radialSegments;
+      const a = ringStart + s;
+      const b = ringStart + s2;
+      const c = nextRingStart + s;
+      const d = nextRingStart + s2;
+      indices.push(a, b, c, b, d, c);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  return geometry;
+}
+
+// Linearly interpolates colorLow → colorHigh across the terrain's *current*
+// height range (not a fixed absolute range), so the gradient stays visible
+// and meaningful whether the terrain is barely bumpy or fully sculpted to
+// its height limit; a perfectly flat terrain renders as solid colorLow.
+// More rings/radial segments (smaller Triangle Size) means more vertices
+// sampling that same range, which is what makes the transition look
+// smoother — the interpolation itself is the same per-vertex lerp either way.
+function buildTerrainColorAttribute(shape) {
+  const heights = shape.heights;
+  let min = Infinity;
+  let max = -Infinity;
+  for (const h of heights) {
+    if (h < min) min = h;
+    if (h > max) max = h;
+  }
+  const span = max - min;
+  const [lr, lg, lb] = hexToRgb01(shape.colorLow);
+  const [hr, hg, hb] = hexToRgb01(shape.colorHigh);
+
+  const colors = new Float32Array(heights.length * 3);
+  for (let i = 0; i < heights.length; i++) {
+    const t = span > 1e-6 ? (heights[i] - min) / span : 0;
+    colors[i * 3] = lr + (hr - lr) * t;
+    colors[i * 3 + 1] = lg + (hg - lg) * t;
+    colors[i * 3 + 2] = lb + (hb - lb) * t;
+  }
+  return colors;
 }
 
 // ─── Three.js scene setup ────────────────────────────────────────────────
@@ -358,7 +444,8 @@ viewport.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x12121a);
-scene.fog = new THREE.Fog(0x12121a, 20, 50);
+// No fog: it faded terrain to the same near-black as empty space, which
+// read as a void around the terrain rather than atmospheric depth.
 
 const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 300);
 camera.position.set(5, 4, 6);
@@ -398,16 +485,57 @@ const SKYBOX_RADIUS = 90;
 let skyboxTexture = null;
 let skyboxMesh = null;
 
-function buildSkyboxGeometry(shapeType) {
+function buildSkyboxGeometry(shapeType, radius = SKYBOX_RADIUS) {
   if (shapeType === "Cylinder") {
     // Open-ended: no cap UV distortion, and this texture has no real zenith
     // to show at the top/bottom anyway.
-    return new THREE.CylinderGeometry(SKYBOX_RADIUS, SKYBOX_RADIUS, SKYBOX_RADIUS, 60, 1, true);
+    return new THREE.CylinderGeometry(radius, radius, radius, 60, 1, true);
   }
   if (shapeType === "Box") {
-    return new THREE.BoxGeometry(SKYBOX_RADIUS, SKYBOX_RADIUS, SKYBOX_RADIUS);
+    return new THREE.BoxGeometry(radius, radius, radius);
   }
-  return new THREE.SphereGeometry(SKYBOX_RADIUS, 60, 40);
+  return new THREE.SphereGeometry(radius, 60, 40);
+}
+
+// If a Terrain shape exists, resize/reposition the skybox to comfortably
+// surround it instead of the fixed default — mirrors fitSkyboxToTerrain in
+// components/PathTracerSandbox/objects/terrain.ts.
+function fitSkyboxToTerrainShape(terrainShape) {
+  if (!skyboxMesh) return;
+  const bounds = new THREE.Box3().setFromObject(terrainShape.mesh);
+  const size = new THREE.Vector3();
+  bounds.getSize(size);
+
+  const fittedRadius = Math.max(size.x, size.z, 1) * 4;
+  const shapeType = document.getElementById("skybox-shape").value;
+
+  skyboxMesh.geometry.dispose();
+  skyboxMesh.geometry = buildSkyboxGeometry(shapeType, fittedRadius);
+
+  // A cylinder has a flat open bottom rim, so planting that at the
+  // terrain's lowest point looks right. A sphere's texture pinches at its
+  // poles — doing the same would plant the camera right up against that
+  // pole (severe UV distortion), so instead its center stays near the
+  // terrain's own vertical midpoint, keeping the camera near the equator.
+  if (shapeType === "Sphere") {
+    skyboxMesh.position.y = (bounds.min.y + bounds.max.y) / 2;
+  } else {
+    skyboxMesh.geometry.computeBoundingBox();
+    const skyboxBounds = skyboxMesh.geometry.boundingBox;
+    const halfHeight = (skyboxBounds.max.y - skyboxBounds.min.y) / 2;
+    skyboxMesh.position.y = bounds.min.y + halfHeight;
+  }
+}
+
+// Hides the fallback ground/grid whenever a Terrain shape exists (so they
+// don't z-fight with it) and fits the skybox to that terrain; otherwise
+// restores both to their defaults.
+function updateGroundForTerrain() {
+  const terrainShape = shapes.find((s) => s.type === "Terrain");
+  ground.visible = !terrainShape;
+  grid.visible = !terrainShape;
+  rebuildSkybox();
+  if (terrainShape) fitSkyboxToTerrainShape(terrainShape);
 }
 
 function rebuildSkybox() {
@@ -526,29 +654,21 @@ function buildMesh(shape) {
   } else if (shape.type === "Pyramid") {
     geometry = new THREE.ConeGeometry(shape.radius, shape.height, 4);
   } else {
-    // Terrain: a low-segment plane, rotated flat *before* heights are
-    // applied so `position.setY` below is already the "up" axis.
-    geometry = new THREE.PlaneGeometry(
-      shape.width,
-      shape.depth,
-      shape.segments,
-      shape.segments
-    );
-    geometry.rotateX(-Math.PI / 2);
-    const position = geometry.getAttribute("position");
-    for (let i = 0; i < position.count; i++) {
-      position.setY(i, shape.heights[i] ?? 0);
-    }
-    position.needsUpdate = true;
+    geometry = buildCircularTerrainGeometry(shape);
+    geometry.setAttribute("color", new THREE.BufferAttribute(buildTerrainColorAttribute(shape), 3));
   }
   const [sx, sy, sz] = shape.scale;
   if (sx !== 1 || sy !== 1 || sz !== 1) geometry.scale(sx, sy, sz);
 
+  const isTerrain = shape.type === "Terrain";
   const material = new THREE.MeshStandardMaterial({
-    color: shape.color,
+    // Terrain is colored per-vertex by its height gradient instead of a
+    // flat material color — white so vertexColors isn't tinted.
+    color: isTerrain ? 0xffffff : shape.color,
+    vertexColors: isTerrain,
     roughness: shape.roughness,
     metalness: shape.metalness,
-    flatShading: shape.type === "Terrain",
+    flatShading: isTerrain,
   });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(shape.position[0], shape.position[1], shape.position[2]);
@@ -701,6 +821,7 @@ function restoreSnapshot(snapshot) {
   attachTransformControls();
   renderShapeList();
   renderInspector();
+  updateGroundForTerrain();
 }
 
 function undo() {
@@ -736,11 +857,13 @@ function addShape(type) {
   else if (type === "Cube") shape.size = 1;
   else if (type === "Pyramid") { shape.radius = 0.6; shape.height = 1; }
   else {
-    shape.width = TERRAIN_SIZE;
-    shape.depth = TERRAIN_SIZE;
+    shape.radius = TERRAIN_RADIUS;
     shape.triangleSize = TERRAIN_DEFAULT_TRIANGLE_SIZE;
-    shape.segments = terrainSegmentsForTriangleSize(shape.triangleSize);
-    shape.heights = new Array((shape.segments + 1) * (shape.segments + 1)).fill(0);
+    shape.rings = terrainRingsForTriangleSize(shape.triangleSize);
+    shape.radialSegments = terrainRadialSegmentsForTriangleSize(shape.triangleSize);
+    shape.heights = new Array(terrainVertexCount(shape.rings, shape.radialSegments)).fill(0);
+    shape.colorLow = TERRAIN_DEFAULT_GRADIENT.low;
+    shape.colorHigh = TERRAIN_DEFAULT_GRADIENT.high;
   }
 
   shape.mesh = buildMesh(shape);
@@ -748,6 +871,7 @@ function addShape(type) {
   shapes.push(shape);
   renderShapeList();
   selectShape(id, false);
+  updateGroundForTerrain();
 }
 
 function duplicateShape(id) {
@@ -762,6 +886,7 @@ function duplicateShape(id) {
   shapes.push(copy);
   renderShapeList();
   selectShape(copy.id, false);
+  updateGroundForTerrain();
 }
 
 function duplicateSelection() {
@@ -782,6 +907,7 @@ function duplicateSelection() {
   selectedIds = new Set(newIds);
   attachTransformControls();
   renderInspector();
+  updateGroundForTerrain();
 }
 
 function deleteShape(id) {
@@ -795,6 +921,7 @@ function deleteShape(id) {
   attachTransformControls();
   renderShapeList();
   renderInspector();
+  updateGroundForTerrain();
 }
 
 function deleteSelected() {
@@ -810,6 +937,7 @@ function deleteSelected() {
   attachTransformControls();
   renderShapeList();
   renderInspector();
+  updateGroundForTerrain();
 }
 
 function clearAll() {
@@ -820,6 +948,7 @@ function clearAll() {
   shapes.length = 0;
   renderShapeList();
   renderInspector();
+  updateGroundForTerrain();
 }
 
 // `additive` is true for shift-click: toggles that one shape's membership
@@ -967,35 +1096,66 @@ function renderInspector() {
       }
       pushUndo();
       shape.triangleSize = newSize;
-      shape.segments = terrainSegmentsForTriangleSize(newSize);
-      shape.heights = new Array((shape.segments + 1) * (shape.segments + 1)).fill(0);
+      shape.rings = terrainRingsForTriangleSize(newSize);
+      shape.radialSegments = terrainRadialSegmentsForTriangleSize(newSize);
+      shape.heights = new Array(terrainVertexCount(shape.rings, shape.radialSegments)).fill(0);
       refreshMesh(shape);
       attachTransformControls();
       renderShapeList();
+      updateGroundForTerrain();
     });
     triWrap.appendChild(triLabel);
     triWrap.appendChild(triInput);
     inspectorEl.appendChild(triWrap);
   }
 
-  // Color
-  const colorWrap = document.createElement("div");
-  colorWrap.className = "field";
-  const colorLabel = document.createElement("label");
-  colorLabel.textContent = "Color";
-  const colorInput = document.createElement("input");
-  colorInput.type = "color";
-  colorInput.value = shape.color;
-  colorInput.addEventListener("input", () => {
-    beginUndoSession();
-    shape.color = colorInput.value;
-    refreshMesh(shape);
-    attachTransformControls();
-  });
-  colorInput.addEventListener("change", endUndoSession);
-  colorWrap.appendChild(colorLabel);
-  colorWrap.appendChild(colorInput);
-  inspectorEl.appendChild(colorWrap);
+  // Color — Terrain gets a low/high gradient pair instead of one flat color.
+  if (shape.type === "Terrain") {
+    const gradientRow = document.createElement("div");
+    gradientRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:6px;";
+
+    const gradientField = (labelText, key) => {
+      const wrap = document.createElement("div");
+      wrap.className = "field";
+      const label = document.createElement("label");
+      label.textContent = labelText;
+      const input = document.createElement("input");
+      input.type = "color";
+      input.value = shape[key];
+      input.addEventListener("input", () => {
+        beginUndoSession();
+        shape[key] = input.value;
+        refreshMesh(shape);
+        attachTransformControls();
+      });
+      input.addEventListener("change", endUndoSession);
+      wrap.appendChild(label);
+      wrap.appendChild(input);
+      return wrap;
+    };
+
+    gradientRow.appendChild(gradientField("Low color", "colorLow"));
+    gradientRow.appendChild(gradientField("High color", "colorHigh"));
+    inspectorEl.appendChild(gradientRow);
+  } else {
+    const colorWrap = document.createElement("div");
+    colorWrap.className = "field";
+    const colorLabel = document.createElement("label");
+    colorLabel.textContent = "Color";
+    const colorInput = document.createElement("input");
+    colorInput.type = "color";
+    colorInput.value = shape.color;
+    colorInput.addEventListener("input", () => {
+      beginUndoSession();
+      shape.color = colorInput.value;
+      refreshMesh(shape);
+      attachTransformControls();
+    });
+    colorInput.addEventListener("change", endUndoSession);
+    colorWrap.appendChild(colorLabel);
+    colorWrap.appendChild(colorInput);
+    inspectorEl.appendChild(colorWrap);
+  }
 
   // Material
   const matRow = document.createElement("div");
@@ -1031,6 +1191,7 @@ function renderInspector() {
       shape.heights.fill(0);
       refreshMesh(shape);
       attachTransformControls();
+      updateGroundForTerrain();
     });
     actions.appendChild(flattenBtn);
   }
@@ -1101,11 +1262,19 @@ function updateSculptDrag(clientY) {
   position.setY(vertexIndex, height);
   position.needsUpdate = true;
   shape.mesh.geometry.computeBoundingSphere();
+
+  // Recomputed in full (not just this vertex) since this height may have
+  // become the new min or max, shifting where every other vertex falls in
+  // the gradient — keeps the color live and accurate while dragging.
+  const color = shape.mesh.geometry.getAttribute("color");
+  color.set(buildTerrainColorAttribute(shape));
+  color.needsUpdate = true;
 }
 
 function endSculptDrag() {
   sculptDrag = null;
   orbitControls.enabled = true;
+  updateGroundForTerrain(); // sculpting changes the terrain's bounds
 }
 
 window.addEventListener("pointermove", (event) => {
@@ -1168,6 +1337,9 @@ transformControls.addEventListener("dragging-changed", (e) => {
 
   attachTransformControls();
   renderShapeList();
+  // Moving/scaling a terrain changes its bounds, which the ground/skybox
+  // fit depends on.
+  if (affected.some((s) => s.type === "Terrain")) updateGroundForTerrain();
 });
 
 window.addEventListener("keydown", (e) => {
@@ -1234,15 +1406,19 @@ function mergeShapesToGeometry(shapeList) {
     s.mesh.updateMatrix();
     geo.applyMatrix4(s.mesh.matrix);
 
-    const [r, g, b] = hexToRgb01(s.color);
-    const count = geo.getAttribute("position").count;
-    const colors = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-      colors[i * 3] = r;
-      colors[i * 3 + 1] = g;
-      colors[i * 3 + 2] = b;
+    // Terrain already carries its own per-vertex gradient color (set in
+    // buildMesh) — only non-Terrain shapes need a uniform color painted on.
+    if (!geo.getAttribute("color")) {
+      const [r, g, b] = hexToRgb01(s.color);
+      const count = geo.getAttribute("position").count;
+      const colors = new Float32Array(count * 3);
+      for (let i = 0; i < count; i++) {
+        colors[i * 3] = r;
+        colors[i * 3 + 1] = g;
+        colors[i * 3 + 2] = b;
+      }
+      geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     }
-    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     return geo;
   });
 
