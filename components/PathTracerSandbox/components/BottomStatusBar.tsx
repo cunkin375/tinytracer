@@ -18,7 +18,7 @@ export function BottomStatusBar({
               className="w-1.5 h-1.5 rounded-full"
               style={{
                 background:
-                  cameraMode === "perspective" ? "#22c55e" : "#6366f1",
+                  cameraMode === "perspective" ? "#74c311" : "#8cb4d9",
               }}
             />
             {cameraMode === "perspective"
