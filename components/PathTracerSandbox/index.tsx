@@ -20,9 +20,15 @@ export default function PathTracerSandbox() {
   const [cameraMode, setCameraMode] = useState<CameraMode>("perspective");
   const [orthoView, setOrthoView] = useState<OrthoView>("front");
   const [selectedName, setSelectedName] = useState<string | null>(null);
+  // Sphere/Cube/Pyramid geometry now loads from .obj files asynchronously,
+  // so the scene isn't ready the instant these hooks are called — see
+  // useThreeScene's onReady callback and useCameraMode's sceneReady param.
+  const [sceneReady, setSceneReady] = useState(false);
 
-  useThreeScene(containerRef, sceneRef, cameraModeRef, setSelectedName);
-  useCameraMode(sceneRef, cameraModeRef, cameraMode, orthoView);
+  useThreeScene(containerRef, sceneRef, cameraModeRef, setSelectedName, () =>
+    setSceneReady(true)
+  );
+  useCameraMode(sceneRef, cameraModeRef, cameraMode, orthoView, sceneReady);
 
   const {
     outputCanvasRef,

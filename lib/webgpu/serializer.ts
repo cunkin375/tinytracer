@@ -26,13 +26,17 @@ const DEFAULT_IOR           = 1.5; // Standard glass
 const _worldPos = new THREE.Vector3();
 
 /**
- * Returns true if the mesh uses a SphereGeometry (the only geometry
- * supported by the path tracer in its current scope).
+ * True for meshes the path tracer treats as an analytic sphere (the only
+ * geometry supported by the path tracer in its current scope). Sphere
+ * geometry loads from a static .obj file (see objects/geometryLoader.ts)
+ * rather than being a THREE.SphereGeometry, so Sphere.ts tags its mesh with
+ * `userData.isSphere` — the geometry.type check is kept only as a fallback.
  */
-function isSphereGeometry(
-  geometry: THREE.BufferGeometry
-): geometry is THREE.SphereGeometry {
-  return geometry.type === "SphereGeometry";
+function isTracedSphere(obj: THREE.Object3D): obj is THREE.Mesh {
+  return (
+    obj instanceof THREE.Mesh &&
+    (obj.userData.isSphere === true || obj.geometry.type === "SphereGeometry")
+  );
 }
 
 // ── Sphere Serialization ────────────────────────────────────────────────────
@@ -53,10 +57,7 @@ export function serializeSpheres(scene: THREE.Scene): Float32Array {
   const sphereMeshes: THREE.Mesh[] = [];
 
   scene.traverse((obj) => {
-    if (
-      obj instanceof THREE.Mesh &&
-      isSphereGeometry(obj.geometry)
-    ) {
+    if (isTracedSphere(obj)) {
       sphereMeshes.push(obj);
     }
   });
@@ -69,7 +70,14 @@ export function serializeSpheres(scene: THREE.Scene): Float32Array {
 
     // ── center_radius (vec4) ──────────────────────────────────────────
     mesh.getWorldPosition(_worldPos);
-    const radius = (mesh.geometry as THREE.SphereGeometry).parameters.radius;
+    // Sphere.ts stores its base radius in userData (mesh.scale may carry an
+    // additional non-uniform "egg" stretch on top, which an analytic sphere
+    // intersection can't represent). geometry.parameters is a fallback for
+    // an actual THREE.SphereGeometry, should one ever end up in the scene.
+    const radius: number =
+      mesh.userData.radius ??
+      (mesh.geometry as THREE.SphereGeometry).parameters?.radius ??
+      1;
 
     data[offset + 0] = _worldPos.x;
     data[offset + 1] = _worldPos.y;
@@ -112,10 +120,7 @@ export function serializeSpheres(scene: THREE.Scene): Float32Array {
 export function countSpheres(scene: THREE.Scene): number {
   let count = 0;
   scene.traverse((obj) => {
-    if (
-      obj instanceof THREE.Mesh &&
-      isSphereGeometry(obj.geometry)
-    ) {
+    if (isTracedSphere(obj)) {
       count++;
     }
   });

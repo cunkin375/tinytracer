@@ -124,6 +124,19 @@
   #shape-list li button:hover { color: #ef4444; background: rgba(239,68,68,0.12); }
   #shape-list .empty-hint { font-size: 11px; color: var(--text-dim); padding: 6px 2px; }
 
+  .mode-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 4px; }
+  .mode-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .mode-btn svg { width: 16px; height: 16px; }
+  .mode-btn.active { background: var(--accent-dim); color: var(--accent); }
+
   #viewport { position: relative; background: #12121a; }
   #viewport canvas { display: block; }
   #viewport .hint {
@@ -154,8 +167,6 @@
     background: transparent;
     padding: 2px;
   }
-  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
-  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
   .empty-hint { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
   .inspector-actions { display: flex; gap: 6px; margin-top: 16px; }
 
@@ -219,6 +230,31 @@
       <span class="swatch" style="background:#e0a3ac"></span> Pyramid
     </button>
 
+    <h2 class="spaced">Transform</h2>
+    <div class="mode-row">
+      <button class="mode-btn active" id="mode-translate" title="Move (G)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M12 2v20M2 12h20M12 2l-3 3M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3" />
+        </svg>
+        Move (G)
+      </button>
+      <button class="mode-btn" id="mode-rotate" title="Rotate (R)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M21 12a9 9 0 11-3.14-6.86" />
+          <path d="M21 3v5h-5" />
+        </svg>
+        Rotate (R)
+      </button>
+      <button class="mode-btn" id="mode-scale" title="Scale (S)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="4" y="4" width="6" height="6" />
+          <rect x="14" y="14" width="6" height="6" />
+          <path d="M10 7h4l3 3v4" />
+        </svg>
+        Scale (S)
+      </button>
+    </div>
+
     <h2 class="spaced">Shapes</h2>
     <ul id="shape-list"></ul>
     <p class="empty-hint" id="list-empty-hint">Nothing added yet.</p>
@@ -227,7 +263,7 @@
   </aside>
 
   <div id="viewport">
-    <div class="hint">Click a shape to select · drag the gizmo to stack it · Delete/Backspace to remove</div>
+    <div class="hint">Click to select · Shift+click for multiple · G Move · R Rotate · S Scale · Ctrl+Z Undo · Delete to remove</div>
   </div>
 
   <aside class="inspector" id="inspector">
@@ -239,7 +275,7 @@
 <dialog id="export-dialog">
   <div class="dialog-inner">
     <h2 id="export-title">Export CustomModel</h2>
-    <p class="sub">Save these as files in <code>components/PathTracerSandbox/objects/</code>, then paste the usage snippet into <code>useThreeScene.ts</code>.</p>
+    <p class="sub">Every shape is merged into one rigid mesh with baked-in colors, so the model won't fall apart when dragged. Download the .obj into <code>public/models/</code>, then paste the loading snippet into <code>useThreeScene.ts</code>.</p>
 
     <div id="export-body"></div>
 
@@ -259,6 +295,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 // ─── Constants (mirrors components/PathTracerSandbox/objects/*.ts) ─────────
 
@@ -317,9 +354,22 @@ orbitControls.target.set(0, 0.5, 0);
 const transformControls = new TransformControls(camera, renderer.domElement);
 transformControls.setMode("translate");
 scene.add(transformControls.getHelper());
-transformControls.addEventListener("dragging-changed", (e) => {
-  orbitControls.enabled = !e.value;
-});
+
+const modeButtons = {
+  translate: document.getElementById("mode-translate"),
+  rotate: document.getElementById("mode-rotate"),
+  scale: document.getElementById("mode-scale"),
+};
+
+function setTransformMode(mode) {
+  transformControls.setMode(mode);
+  modeButtons.translate.classList.toggle("active", mode === "translate");
+  modeButtons.rotate.classList.toggle("active", mode === "rotate");
+  modeButtons.scale.classList.toggle("active", mode === "scale");
+}
+modeButtons.translate.addEventListener("click", () => setTransformMode("translate"));
+modeButtons.rotate.addEventListener("click", () => setTransformMode("rotate"));
+modeButtons.scale.addEventListener("click", () => setTransformMode("scale"));
 
 function resize() {
   const w = viewport.clientWidth;
@@ -340,9 +390,14 @@ resize();
 // ─── Shape state ─────────────────────────────────────────────────────────
 
 let nextId = 1;
-let selectedId = null;
+let selectedIds = new Set();
+let selectionPivot = null; // temporary Group used while dragging >1 shape
 const shapes = [];
 
+// Mirrors the `scale` field on SphereConfig/CubeConfig/PyramidConfig: baked
+// into the geometry (via geometry.scale()) rather than left as a mesh
+// transform, so a "squished" sphere or "rectangular" cube exports and
+// reloads identically through the real classes.
 function buildMesh(shape) {
   let geometry;
   if (shape.type === "Sphere") {
@@ -352,6 +407,9 @@ function buildMesh(shape) {
   } else {
     geometry = new THREE.ConeGeometry(shape.radius, shape.height, 4);
   }
+  const [sx, sy, sz] = shape.scale;
+  if (sx !== 1 || sy !== 1 || sz !== 1) geometry.scale(sx, sy, sz);
+
   const material = new THREE.MeshStandardMaterial({
     color: shape.color,
     roughness: shape.roughness,
@@ -359,7 +417,7 @@ function buildMesh(shape) {
   });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(shape.position[0], shape.position[1], shape.position[2]);
-  if (shape.type === "Pyramid") mesh.rotation.y = Math.PI / 4;
+  mesh.rotation.set(shape.rotation[0], shape.rotation[1], shape.rotation[2]);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   mesh.userData.shapeId = shape.id;
@@ -367,16 +425,138 @@ function buildMesh(shape) {
 }
 
 function refreshMesh(shape) {
-  const wasSelected = selectedId === shape.id;
   scene.remove(shape.mesh);
   shape.mesh.geometry.dispose();
   shape.mesh.material.dispose();
   shape.mesh = buildMesh(shape);
   scene.add(shape.mesh);
-  if (wasSelected) transformControls.attach(shape.mesh);
+}
+
+// A scale-mode drag leaves the gizmo's factor on mesh.scale; fold it into
+// the shape's persistent, per-axis `scale` and rebuild geometry at 1 so the
+// gizmo always starts the next drag from a clean baseline.
+function applyScale(shape) {
+  const { x, y, z } = shape.mesh.scale;
+  shape.scale = [
+    Math.max(0.02, shape.scale[0] * x),
+    Math.max(0.02, shape.scale[1] * y),
+    Math.max(0.02, shape.scale[2] * z),
+  ];
+  refreshMesh(shape);
+}
+
+// ─── Multi-select transform attachment ──────────────────────────────────
+
+// TransformControls only ever targets one Object3D. For >1 selected shape,
+// reparent them under a temporary pivot Group at their centroid and attach
+// the gizmo to that instead — Object3D.attach() preserves each shape's world
+// transform across the reparent, so this doesn't move anything on its own.
+function attachTransformControls() {
+  transformControls.detach();
+
+  const selected = shapes.filter((s) => selectedIds.has(s.id));
+  if (selected.length === 0) return;
+
+  if (selected.length === 1) {
+    transformControls.attach(selected[0].mesh);
+    return;
+  }
+
+  const center = new THREE.Vector3();
+  selected.forEach((s) => center.add(s.mesh.position));
+  center.divideScalar(selected.length);
+
+  selectionPivot = new THREE.Group();
+  selectionPivot.position.copy(center);
+  scene.add(selectionPivot);
+  selected.forEach((s) => selectionPivot.attach(s.mesh));
+
+  transformControls.attach(selectionPivot);
+}
+
+// Reparents any pivoted shapes back under the scene (preserving their new
+// world transform) and removes the pivot. Safe to call when no pivot exists.
+function detachTransformPivot() {
+  if (!selectionPivot) return;
+  const pivot = selectionPivot;
+  selectionPivot = null;
+  [...pivot.children].forEach((child) => scene.attach(child));
+  scene.remove(pivot);
+}
+
+// ─── Undo / redo ─────────────────────────────────────────────────────────
+
+const MAX_UNDO = 50;
+let undoStack = [];
+let redoStack = [];
+// Number/color inputs fire many 'input' events per interaction; only the
+// first one in a session pushes an undo snapshot, so a whole slider drag
+// undoes in one Ctrl+Z instead of dozens.
+let undoSessionActive = false;
+
+function snapshotShapes() {
+  return shapes.map(({ mesh, ...data }) => ({
+    ...data,
+    position: [...data.position],
+    rotation: [...data.rotation],
+    scale: [...data.scale],
+  }));
+}
+
+function pushUndo() {
+  undoStack.push(snapshotShapes());
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+  redoStack.length = 0;
+}
+
+function beginUndoSession() {
+  if (!undoSessionActive) {
+    pushUndo();
+    undoSessionActive = true;
+  }
+}
+function endUndoSession() {
+  undoSessionActive = false;
+}
+
+function restoreSnapshot(snapshot) {
+  shapes.forEach((s) => {
+    scene.remove(s.mesh);
+    s.mesh.geometry.dispose();
+    s.mesh.material.dispose();
+  });
+  shapes.length = 0;
+  snapshot.forEach((data) => {
+    const shape = {
+      ...data,
+      position: [...data.position],
+      rotation: [...data.rotation],
+      scale: [...data.scale],
+    };
+    shape.mesh = buildMesh(shape);
+    scene.add(shape.mesh);
+    shapes.push(shape);
+  });
+  selectedIds.clear();
+  attachTransformControls();
+  renderShapeList();
+  renderInspector();
+}
+
+function undo() {
+  if (undoStack.length === 0) return;
+  redoStack.push(snapshotShapes());
+  restoreSnapshot(undoStack.pop());
+}
+
+function redo() {
+  if (redoStack.length === 0) return;
+  undoStack.push(snapshotShapes());
+  restoreSnapshot(redoStack.pop());
 }
 
 function addShape(type) {
+  pushUndo();
   const id = nextId++;
   const shape = {
     id,
@@ -385,6 +565,10 @@ function addShape(type) {
     roughness: DEFAULT_ROUGHNESS,
     metalness: DEFAULT_METALNESS,
     position: [0, 0.5, 0],
+    // Pyramids start with their flat face forward instead of an edge; the
+    // gizmo's Rotate mode can turn any shape further from there.
+    rotation: type === "Pyramid" ? [0, Math.PI / 4, 0] : [0, 0, 0],
+    scale: [1, 1, 1],
   };
   if (type === "Sphere") shape.radius = 0.5;
   else if (type === "Cube") shape.size = 1;
@@ -394,41 +578,84 @@ function addShape(type) {
   scene.add(shape.mesh);
   shapes.push(shape);
   renderShapeList();
-  selectShape(id);
+  selectShape(id, false);
 }
 
 function duplicateShape(id) {
   const original = shapes.find((s) => s.id === id);
   if (!original) return;
+  pushUndo();
   const copy = { ...original, id: nextId++ };
   copy.position = [original.position[0] + 0.4, original.position[1], original.position[2] + 0.4];
+  copy.rotation = [...original.rotation];
+  copy.scale = [...original.scale];
   delete copy.mesh;
   copy.mesh = buildMesh(copy);
   scene.add(copy.mesh);
   shapes.push(copy);
   renderShapeList();
-  selectShape(copy.id);
+  selectShape(copy.id, false);
+}
+
+function duplicateSelection() {
+  const originals = shapes.filter((s) => selectedIds.has(s.id));
+  if (originals.length === 0) return;
+  pushUndo();
+  const newIds = [];
+  originals.forEach((original) => {
+    const copy = { ...original, id: nextId++ };
+    copy.position = [original.position[0] + 0.4, original.position[1], original.position[2] + 0.4];
+    copy.rotation = [...original.rotation];
+    copy.scale = [...original.scale];
+    delete copy.mesh;
+    copy.mesh = buildMesh(copy);
+    scene.add(copy.mesh);
+    shapes.push(copy);
+    newIds.push(copy.id);
+  });
+  renderShapeList();
+  selectedIds = new Set(newIds);
+  attachTransformControls();
+  renderInspector();
 }
 
 function deleteShape(id) {
   const idx = shapes.findIndex((s) => s.id === id);
   if (idx === -1) return;
+  pushUndo();
   const shape = shapes[idx];
-  if (selectedId === id) {
-    transformControls.detach();
-    selectedId = null;
-  }
+  selectedIds.delete(id);
   scene.remove(shape.mesh);
   shape.mesh.geometry.dispose();
   shape.mesh.material.dispose();
   shapes.splice(idx, 1);
+  attachTransformControls();
+  renderShapeList();
+  renderInspector();
+}
+
+function deleteSelected() {
+  if (selectedIds.size === 0) return;
+  pushUndo();
+  [...selectedIds].forEach((id) => {
+    const idx = shapes.findIndex((s) => s.id === id);
+    if (idx === -1) return;
+    const shape = shapes[idx];
+    scene.remove(shape.mesh);
+    shape.mesh.geometry.dispose();
+    shape.mesh.material.dispose();
+    shapes.splice(idx, 1);
+  });
+  selectedIds.clear();
+  attachTransformControls();
   renderShapeList();
   renderInspector();
 }
 
 function clearAll() {
-  transformControls.detach();
-  selectedId = null;
+  pushUndo();
+  selectedIds.clear();
+  attachTransformControls();
   shapes.forEach((s) => {
     scene.remove(s.mesh);
     s.mesh.geometry.dispose();
@@ -439,11 +666,19 @@ function clearAll() {
   renderInspector();
 }
 
-function selectShape(id) {
-  selectedId = id;
-  const shape = shapes.find((s) => s.id === id);
-  if (shape) transformControls.attach(shape.mesh);
-  else transformControls.detach();
+// `additive` is true for shift-click: toggles that one shape's membership
+// in the selection instead of replacing it. Shift-clicking empty space
+// preserves the current selection rather than clearing it.
+function selectShape(id, additive) {
+  if (id === null) {
+    if (!additive) selectedIds.clear();
+  } else if (additive) {
+    if (selectedIds.has(id)) selectedIds.delete(id);
+    else selectedIds.add(id);
+  } else {
+    selectedIds = new Set([id]);
+  }
+  attachTransformControls();
   renderShapeList();
   renderInspector();
 }
@@ -463,8 +698,8 @@ function renderShapeList() {
   listEmptyHint.style.display = shapes.length === 0 ? "block" : "none";
   shapes.forEach((shape) => {
     const li = document.createElement("li");
-    li.className = shape.id === selectedId ? "selected" : "";
-    li.addEventListener("click", () => selectShape(shape.id));
+    li.className = selectedIds.has(shape.id) ? "selected" : "";
+    li.addEventListener("click", (e) => selectShape(shape.id, e.shiftKey));
 
     const label = document.createElement("span");
     label.className = "label";
@@ -501,7 +736,11 @@ function numberField(labelText, value, step, min, onChange) {
   input.step = step;
   if (min !== undefined) input.min = min;
   input.value = value;
-  input.addEventListener("input", () => onChange(parseFloat(input.value) || 0));
+  input.addEventListener("input", () => {
+    beginUndoSession();
+    onChange(parseFloat(input.value) || 0);
+  });
+  input.addEventListener("change", endUndoSession);
   wrap.appendChild(label);
   wrap.appendChild(input);
   return wrap;
@@ -513,8 +752,7 @@ function renderInspector() {
   heading.textContent = "Inspector";
   inspectorEl.appendChild(heading);
 
-  const shape = shapes.find((s) => s.id === selectedId);
-  if (!shape) {
+  if (selectedIds.size === 0) {
     const hint = document.createElement("p");
     hint.className = "empty-hint";
     hint.textContent = "Select a shape to edit its properties.";
@@ -522,66 +760,33 @@ function renderInspector() {
     return;
   }
 
+  if (selectedIds.size > 1) {
+    const info = document.createElement("p");
+    info.className = "empty-hint";
+    info.style.marginBottom = "14px";
+    info.textContent = `${selectedIds.size} shapes selected — drag the gizmo to move, rotate, or scale them together.`;
+    inspectorEl.appendChild(info);
+
+    const actions = document.createElement("div");
+    actions.className = "inspector-actions";
+    const dupBtn = document.createElement("button");
+    dupBtn.className = "ghost-btn";
+    dupBtn.style.width = "100%";
+    dupBtn.textContent = "Duplicate selection";
+    dupBtn.addEventListener("click", () => duplicateSelection());
+    actions.appendChild(dupBtn);
+    inspectorEl.appendChild(actions);
+    return;
+  }
+
+  const shape = shapes.find((s) => selectedIds.has(s.id));
+  if (!shape) return;
+
   const typeLabel = document.createElement("p");
   typeLabel.className = "empty-hint";
   typeLabel.style.marginBottom = "14px";
-  typeLabel.textContent = shape.type;
+  typeLabel.textContent = shape.type + " — drag the gizmo in the viewport to move, rotate, or resize";
   inspectorEl.appendChild(typeLabel);
-
-  // Position
-  const posLabel = document.createElement("label");
-  posLabel.textContent = "Position (X, Y, Z)";
-  posLabel.style.cssText = "display:block;font-size:11px;color:var(--text-dim);margin-bottom:4px;";
-  inspectorEl.appendChild(posLabel);
-
-  const posRow = document.createElement("div");
-  posRow.className = "row3";
-  ["X", "Y", "Z"].forEach((axis, i) => {
-    const input = document.createElement("input");
-    input.type = "number";
-    input.step = 0.1;
-    input.value = shape.position[i];
-    input.title = axis;
-    input.addEventListener("input", () => {
-      shape.position[i] = parseFloat(input.value) || 0;
-      shape.mesh.position.set(shape.position[0], shape.position[1], shape.position[2]);
-      renderShapeList();
-    });
-    posRow.appendChild(input);
-  });
-  inspectorEl.appendChild(posRow);
-  const spacer = document.createElement("div");
-  spacer.style.height = "12px";
-  inspectorEl.appendChild(spacer);
-
-  // Type-specific size fields
-  if (shape.type === "Sphere") {
-    inspectorEl.appendChild(numberField("Radius", shape.radius, 0.05, 0.05, (v) => {
-      shape.radius = Math.max(0.05, v);
-      refreshMesh(shape);
-      renderShapeList();
-    }));
-  } else if (shape.type === "Cube") {
-    inspectorEl.appendChild(numberField("Size", shape.size, 0.05, 0.05, (v) => {
-      shape.size = Math.max(0.05, v);
-      refreshMesh(shape);
-      renderShapeList();
-    }));
-  } else {
-    const row = document.createElement("div");
-    row.className = "row2";
-    row.appendChild(numberField("Radius", shape.radius, 0.05, 0.05, (v) => {
-      shape.radius = Math.max(0.05, v);
-      refreshMesh(shape);
-      renderShapeList();
-    }));
-    row.appendChild(numberField("Height", shape.height, 0.05, 0.05, (v) => {
-      shape.height = Math.max(0.05, v);
-      refreshMesh(shape);
-      renderShapeList();
-    }));
-    inspectorEl.appendChild(row);
-  }
 
   // Color
   const colorWrap = document.createElement("div");
@@ -592,23 +797,28 @@ function renderInspector() {
   colorInput.type = "color";
   colorInput.value = shape.color;
   colorInput.addEventListener("input", () => {
+    beginUndoSession();
     shape.color = colorInput.value;
     refreshMesh(shape);
+    attachTransformControls();
   });
+  colorInput.addEventListener("change", endUndoSession);
   colorWrap.appendChild(colorLabel);
   colorWrap.appendChild(colorInput);
   inspectorEl.appendChild(colorWrap);
 
-  // Roughness / Metalness
+  // Material
   const matRow = document.createElement("div");
-  matRow.className = "row2";
+  matRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:6px;";
   matRow.appendChild(numberField("Roughness", shape.roughness, 0.01, 0, (v) => {
     shape.roughness = Math.min(1, Math.max(0, v));
     refreshMesh(shape);
+    attachTransformControls();
   }));
   matRow.appendChild(numberField("Metalness", shape.metalness, 0.01, 0, (v) => {
     shape.metalness = Math.min(1, Math.max(0, v));
     refreshMesh(shape);
+    attachTransformControls();
   }));
   inspectorEl.appendChild(matRow);
 
@@ -616,14 +826,10 @@ function renderInspector() {
   actions.className = "inspector-actions";
   const dupBtn = document.createElement("button");
   dupBtn.className = "ghost-btn";
+  dupBtn.style.width = "100%";
   dupBtn.textContent = "Duplicate";
   dupBtn.addEventListener("click", () => duplicateShape(shape.id));
-  const delBtn = document.createElement("button");
-  delBtn.className = "ghost-btn";
-  delBtn.textContent = "Delete";
-  delBtn.addEventListener("click", () => deleteShape(shape.id));
   actions.appendChild(dupBtn);
-  actions.appendChild(delBtn);
   inspectorEl.appendChild(actions);
 }
 
@@ -655,23 +861,65 @@ renderer.domElement.addEventListener("pointerdown", (event) => {
   const hits = raycaster.intersectObjects(shapes.map((s) => s.mesh), false);
   if (hits.length > 0) {
     const hit = hits[0].object;
-    selectShape(hit.userData.shapeId);
+    selectShape(hit.userData.shapeId, event.shiftKey);
   } else {
-    selectShape(null);
+    selectShape(null, event.shiftKey);
   }
 });
 
-transformControls.addEventListener("objectChange", () => {
-  const shape = shapes.find((s) => s.id === selectedId);
-  if (!shape) return;
-  shape.position = [shape.mesh.position.x, shape.mesh.position.y, shape.mesh.position.z];
-  renderInspector();
+// Sync happens only once per drag (on release), not continuously — simpler,
+// and it's what makes a whole drag undo in a single Ctrl+Z.
+transformControls.addEventListener("dragging-changed", (e) => {
+  orbitControls.enabled = !e.value;
+
+  if (e.value) {
+    pushUndo();
+    return;
+  }
+
+  const mode = transformControls.mode;
+  const affected = shapes.filter((s) => selectedIds.has(s.id));
+
+  detachTransformPivot();
+
+  affected.forEach((shape) => {
+    shape.position = [shape.mesh.position.x, shape.mesh.position.y, shape.mesh.position.z];
+    if (mode === "rotate") {
+      shape.rotation = [shape.mesh.rotation.x, shape.mesh.rotation.y, shape.mesh.rotation.z];
+    } else if (mode === "scale") {
+      applyScale(shape);
+    }
+  });
+
+  attachTransformControls();
+  renderShapeList();
 });
 
 window.addEventListener("keydown", (e) => {
   if (document.activeElement && document.activeElement.tagName === "INPUT") return;
-  if ((e.key === "Delete" || e.key === "Backspace") && selectedId !== null) {
-    deleteShape(selectedId);
+
+  const isModifier = e.ctrlKey || e.metaKey;
+  if (isModifier && e.key.toLowerCase() === "z") {
+    e.preventDefault();
+    if (e.shiftKey) redo();
+    else undo();
+    return;
+  }
+
+  switch (e.key.toLowerCase()) {
+    case "g":
+      setTransformMode("translate");
+      break;
+    case "r":
+      setTransformMode("rotate");
+      break;
+    case "s":
+      setTransformMode("scale");
+      break;
+    case "delete":
+    case "backspace":
+      deleteSelected();
+      break;
   }
 });
 
@@ -683,91 +931,127 @@ function toPascalCase(str) {
   return pascal || "CustomModel";
 }
 
-function toScreamingSnake(pascal) {
-  return pascal.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase();
-}
-
-function fmt(n) {
-  const num = Number(n);
-  if (Number.isInteger(num)) return String(num);
-  return String(Math.round(num * 1000) / 1000);
-}
-
-function toHexLiteral(cssColor) {
-  return "0x" + cssColor.replace("#", "").toLowerCase();
-}
-
 function escapeHtml(str) {
   return str.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 }
 
-function generateClassCode(className, shapeList) {
-  const usedTypes = [...new Set(shapeList.map((s) => s.type))];
-  const imports = usedTypes.map((t) => `import { ${t} } from "./${t}";`).join("\n");
-
-  const adds = shapeList.map((s) => {
-    const fields = [`position: [${fmt(s.position[0])}, ${fmt(s.position[1])}, ${fmt(s.position[2])}] as const`];
-    if (s.type === "Sphere") fields.push(`radius: ${fmt(s.radius)}`);
-    if (s.type === "Cube") fields.push(`size: ${fmt(s.size)}`);
-    if (s.type === "Pyramid") { fields.push(`radius: ${fmt(s.radius)}`); fields.push(`height: ${fmt(s.height)}`); }
-    fields.push(`color: ${toHexLiteral(s.color)}`);
-    if (Math.abs(s.roughness - DEFAULT_ROUGHNESS) > 1e-6) fields.push(`roughness: ${fmt(s.roughness)}`);
-    if (Math.abs(s.metalness - DEFAULT_METALNESS) > 1e-6) fields.push(`metalness: ${fmt(s.metalness)}`);
-    return `    this.add(new ${s.type}({ ${fields.join(", ")} }));`;
-  }).join("\n");
-
+// Merges every shape's geometry — with its position/rotation/scale baked in
+// — into a single indexed BufferGeometry, so the exported model is one rigid
+// mesh instead of separately-draggable pieces. Per-shape color survives the
+// merge as a vertex-color attribute (OBJ's `v x y z r g b` extension); a
+// single mesh can't carry per-vertex roughness/metalness, so those become
+// one averaged value for the whole model (see generateObjUsageSnippet).
+function hexToRgb01(hex) {
+  const h = hex.replace("#", "");
   return [
-    `import * as THREE from "three";`,
-    imports,
-    ``,
-    `export interface ${className}Config {`,
-    `  position: readonly [number, number, number];`,
-    `  name?: string;`,
-    `}`,
-    ``,
-    `/** A composite model built from stacked primitives (generated by the shape editor). */`,
-    `export class ${className} extends THREE.Group {`,
-    `  constructor({ position, name }: ${className}Config) {`,
-    `    super();`,
-    ``,
-    adds,
-    ``,
-    `    this.position.set(...position);`,
-    `    if (name) this.name = name;`,
-    `  }`,
-    `}`,
-    ``,
-  ].join("\n");
+    parseInt(h.slice(0, 2), 16) / 255,
+    parseInt(h.slice(2, 4), 16) / 255,
+    parseInt(h.slice(4, 6), 16) / 255,
+  ];
 }
 
-function generateFactoryCode(className, worldPosition) {
-  const snake = toScreamingSnake(className);
-  const nameExpr = "`" + className + " ${i + 1}`";
-  return [
-    `import { ${className} } from "./${className}";`,
-    ``,
-    `const ${snake}_CONFIGS = [`,
-    `  { position: [${fmt(worldPosition[0])}, ${fmt(worldPosition[1])}, ${fmt(worldPosition[2])}] as const },`,
-    `];`,
-    ``,
-    `/** Builds the sandbox's default ${className} set. */`,
-    `export function createScene${className}s(): ${className}[] {`,
-    `  return ${snake}_CONFIGS.map(`,
-    `    (config, i) => new ${className}({ ...config, name: ${nameExpr} })`,
-    `  );`,
-    `}`,
-    ``,
-  ].join("\n");
+function mergeShapesToGeometry(shapeList) {
+  const geometries = shapeList.map((s) => {
+    const geo = s.mesh.geometry.clone();
+    s.mesh.updateMatrix();
+    geo.applyMatrix4(s.mesh.matrix);
+
+    const [r, g, b] = hexToRgb01(s.color);
+    const count = geo.getAttribute("position").count;
+    const colors = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      colors[i * 3] = r;
+      colors[i * 3 + 1] = g;
+      colors[i * 3 + 2] = b;
+    }
+    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    return geo;
+  });
+
+  return mergeGeometries(geometries, false);
 }
 
-function generateUsageSnippet(className) {
+// THREE's OBJExporter can't write vertex colors or merge multiple meshes
+// into one `o` block, so this hand-writes the OBJ text directly from the
+// merged geometry's attributes instead of going through it.
+function geometryToObjText(geometry, objectName) {
+  const position = geometry.getAttribute("position");
+  const normal = geometry.getAttribute("normal");
+  const uv = geometry.getAttribute("uv");
+  const color = geometry.getAttribute("color");
+  const index = geometry.getIndex();
+
+  const lines = [`o ${objectName}`];
+
+  for (let i = 0; i < position.count; i++) {
+    const parts = [position.getX(i), position.getY(i), position.getZ(i)];
+    if (color) parts.push(color.getX(i), color.getY(i), color.getZ(i));
+    lines.push("v " + parts.join(" "));
+  }
+  if (uv) {
+    for (let i = 0; i < uv.count; i++) lines.push(`vt ${uv.getX(i)} ${uv.getY(i)}`);
+  }
+  if (normal) {
+    for (let i = 0; i < normal.count; i++) {
+      lines.push(`vn ${normal.getX(i)} ${normal.getY(i)} ${normal.getZ(i)}`);
+    }
+  }
+
+  const faceVert = (i) => {
+    const v = i + 1;
+    if (uv && normal) return `${v}/${v}/${v}`;
+    if (uv) return `${v}/${v}`;
+    if (normal) return `${v}//${v}`;
+    return `${v}`;
+  };
+
+  if (index) {
+    for (let i = 0; i < index.count; i += 3) {
+      lines.push(`f ${faceVert(index.getX(i))} ${faceVert(index.getX(i + 1))} ${faceVert(index.getX(i + 2))}`);
+    }
+  } else {
+    for (let i = 0; i < position.count; i += 3) {
+      lines.push(`f ${faceVert(i)} ${faceVert(i + 1)} ${faceVert(i + 2)}`);
+    }
+  }
+
+  return lines.join("\n") + "\n";
+}
+
+function generateMergedObj(className, shapeList) {
+  const merged = mergeShapesToGeometry(shapeList);
+  return geometryToObjText(merged, className);
+}
+
+function averageMaterial(shapeList) {
+  const roughness = shapeList.reduce((sum, s) => sum + s.roughness, 0) / shapeList.length;
+  const metalness = shapeList.reduce((sum, s) => sum + s.metalness, 0) / shapeList.length;
+  return { roughness, metalness };
+}
+
+function generateObjUsageSnippet(className, shapeList) {
+  const { roughness, metalness } = averageMaterial(shapeList);
   return [
-    `import { createScene${className}s } from "../objects/scene${className}s";`,
+    `import { OBJLoader } from "three/addons/loaders/OBJLoader.js";`,
     ``,
-    `createScene${className}s().forEach((instance) => {`,
-    `  scene.add(instance);`,
-    `  instance.children.forEach((child) => {`,
-    `    if (child instanceof THREE.Mesh) selectables.push(child);`,
+    `new OBJLoader().load("/models/${className}.obj", (object) => {`,
+    `  const material = new THREE.MeshStandardMaterial({`,
+    `    vertexColors: true,`,
+    `    roughness: ${roughness.toFixed(2)},`,
+    `    metalness: ${metalness.toFixed(2)},`,
+    `  });`,
+    `  // Rest the model's bottom on the floor regardless of how it was`,
+    `  // positioned in the editor.`,
+    `  const bounds = new THREE.Box3().setFromObject(object);`,
+    `  object.position.y -= bounds.min.y;`,
+    `  scene.add(object);`,
+    `  object.traverse((child) => {`,
+    `    if (child instanceof THREE.Mesh) {`,
+    `      child.material = material;`,
+    `      child.castShadow = true;`,
+    `      child.receiveShadow = true;`,
+    `      selectables.push(child);`,
+    `    }`,
     `  });`,
     `});`,
     ``,
@@ -780,7 +1064,17 @@ const dialog = document.getElementById("export-dialog");
 const exportTitle = document.getElementById("export-title");
 const exportBody = document.getElementById("export-body");
 
-function makeCodeBlock(filenameOrLabel, code) {
+function downloadFile(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function makeCodeBlock(filenameOrLabel, code, downloadInfo) {
   const block = document.createElement("div");
   block.className = "code-block";
 
@@ -789,6 +1083,10 @@ function makeCodeBlock(filenameOrLabel, code) {
   const fn = document.createElement("span");
   fn.className = "filename";
   fn.textContent = filenameOrLabel;
+
+  const btnGroup = document.createElement("div");
+  btnGroup.style.cssText = "display:flex;gap:6px;";
+
   const copyBtn = document.createElement("button");
   copyBtn.className = "ghost-btn";
   copyBtn.textContent = "Copy";
@@ -798,8 +1096,18 @@ function makeCodeBlock(filenameOrLabel, code) {
       setTimeout(() => (copyBtn.textContent = "Copy"), 1200);
     });
   });
+  btnGroup.appendChild(copyBtn);
+
+  if (downloadInfo) {
+    const dlBtn = document.createElement("button");
+    dlBtn.className = "ghost-btn";
+    dlBtn.textContent = "Download";
+    dlBtn.addEventListener("click", () => downloadFile(downloadInfo.filename, code, downloadInfo.mimeType));
+    btnGroup.appendChild(dlBtn);
+  }
+
   head.appendChild(fn);
-  head.appendChild(copyBtn);
+  head.appendChild(btnGroup);
 
   const pre = document.createElement("pre");
   const codeEl = document.createElement("code");
@@ -817,17 +1125,15 @@ document.getElementById("export-btn").addEventListener("click", () => {
     return;
   }
   const className = toPascalCase(document.getElementById("model-name").value);
-  const worldPosition = [0, 0, 0];
 
-  const classCode = generateClassCode(className, shapes);
-  const factoryCode = generateFactoryCode(className, worldPosition);
-  const usageCode = generateUsageSnippet(className);
+  const objText = generateMergedObj(className, shapes);
+  const objUsageCode = generateObjUsageSnippet(className, shapes);
 
   exportTitle.textContent = `Export ${className}`;
   exportBody.innerHTML = "";
-  exportBody.appendChild(makeCodeBlock(`objects/${className}.ts`, classCode));
-  exportBody.appendChild(makeCodeBlock(`objects/scene${className}s.ts`, factoryCode));
-  exportBody.appendChild(makeCodeBlock(`paste into hooks/useThreeScene.ts`, usageCode));
+
+  exportBody.appendChild(makeCodeBlock(`${className}.obj`, objText, { filename: `${className}.obj`, mimeType: "text/plain" }));
+  exportBody.appendChild(makeCodeBlock(`paste into useThreeScene.ts (after saving ${className}.obj to public/models/)`, objUsageCode));
 
   dialog.showModal();
 });

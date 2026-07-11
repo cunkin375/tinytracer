@@ -11,7 +11,8 @@ export function useCameraMode(
   sceneRef: RefObject<SceneRefs | null>,
   cameraModeRef: RefObject<CameraMode>,
   cameraMode: CameraMode,
-  orthoView: OrthoView
+  orthoView: OrthoView,
+  sceneReady: boolean
 ) {
   const switchCamera = useCallback(
     (mode: CameraMode, view: OrthoView = "front") => {
@@ -55,6 +56,11 @@ export function useCameraMode(
   );
 
   useEffect(() => {
+    // `sceneReady` is a dependency (not just a guard inside switchCamera)
+    // because the scene now loads asynchronously: on mount, this effect can
+    // run before sceneRef.current exists, and nothing else would re-trigger
+    // it once loading finishes. Flipping sceneReady to true does.
+    if (!sceneReady) return;
     switchCamera(cameraMode, orthoView);
-  }, [cameraMode, orthoView, switchCamera]);
+  }, [cameraMode, orthoView, switchCamera, sceneReady]);
 }
