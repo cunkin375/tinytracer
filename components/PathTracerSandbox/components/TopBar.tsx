@@ -1,3 +1,5 @@
+import { BrandButton } from "@/components/BrandButton";
+
 export function TopBar({
   isTracing,
   onRunTracer,
@@ -8,39 +10,8 @@ export function TopBar({
   return (
     <div className="absolute top-0 left-0 right-0 z-10 pointer-events-none">
       <div className="flex items-center justify-between px-5 py-4">
-        {/* Logo / Title */}
-        <div className="pointer-events-auto flex items-center gap-3">
-          <div
-            className="w-8 h-8 rounded-lg flex items-center justify-center"
-            style={{
-              background: "linear-gradient(135deg, #74c311 0%, #235338 100%)",
-            }}
-          >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 16 16"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path
-                d="M8 1L14 4.5V11.5L8 15L2 11.5V4.5L8 1Z"
-                stroke="white"
-                strokeWidth="1.5"
-                strokeLinejoin="round"
-              />
-              <circle cx="8" cy="8" r="2.5" fill="white" opacity="0.9" />
-            </svg>
-          </div>
-          <div>
-            <h1 className="text-sm font-semibold tracking-tight text-white/90">
-              TinyTracer
-            </h1>
-            <p className="text-[10px] text-white/40 tracking-wide uppercase">
-              Scene Configurator
-            </p>
-          </div>
-        </div>
+        {/* Logo / Title — back to the landing page */}
+        <BrandButton label="forest" />
 
         {/* Run button */}
         <button

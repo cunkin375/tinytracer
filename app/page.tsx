@@ -1,10 +1,15 @@
 import Link from "next/link";
 import { DayNightBackground } from "@/components/DayNightBackground";
+import { BrandButton } from "@/components/BrandButton";
 
 export default function Home() {
   return (
     <main className="relative flex-1 flex flex-col items-center justify-center gap-12 px-6 pb-20 sm:pb-32">
       <DayNightBackground />
+
+      <div className="absolute top-5 left-5 z-10">
+        <BrandButton />
+      </div>
 
       <h1 className="relative text-8xl sm:text-9xl font-bold tracking-tight text-white/90 drop-shadow-[0_2px_12px_rgba(0,0,0,0.5)]">
         tiny tracer

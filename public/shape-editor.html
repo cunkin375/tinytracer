@@ -26,8 +26,24 @@
     background: var(--panel);
     border-bottom: 1px solid var(--border);
   }
-  header h1 { font-size: 14px; font-weight: 600; margin: 0; white-space: nowrap; }
   header p { margin: 0; font-size: 11px; color: var(--text-dim); }
+  .brand-btn {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 8px 16px;
+    border-radius: 12px;
+    background: rgba(18, 18, 26, 0.85);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(35, 83, 56, 0.45);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    text-decoration: none;
+    flex-shrink: 0;
+    transition: background 0.15s;
+  }
+  .brand-btn:hover { background: rgba(255,255,255,0.05); }
+  .brand-btn .brand-name { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; color: rgba(255,255,255,0.9); }
+  .brand-btn .brand-label { font-size: 10px; color: rgba(255,255,255,0.4); letter-spacing: 0.06em; text-transform: uppercase; }
   header .spacer { flex: 1; }
   header label { font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 6px; }
   header input[type="text"] {
@@ -208,7 +224,10 @@
 <body>
 
 <header>
-  <h1>TinyTracer Shape Editor</h1>
+  <a class="brand-btn" href="/">
+    <span class="brand-name">tiny tracer</span>
+    <span class="brand-label">shape editor</span>
+  </a>
   <p>Stack spheres, cubes &amp; pyramids into a custom model, then export it.</p>
   <div class="spacer"></div>
   <label>Model name
