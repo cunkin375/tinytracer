@@ -21,6 +21,7 @@ const MAX_FLOAT: f32 = 3.402823466e+38;
 const MAT_LAMBERTIAN: u32 = 0u;
 const MAT_METAL:      u32 = 1u;
 const MAT_DIELECTRIC:  u32 = 2u;
+const MAT_EMISSIVE:    u32 = 3u;
 
 // ── Data Structures ─────────────────────────────────────────────────────────
 
@@ -569,6 +570,8 @@ fn trace(initial_ray: Ray) -> vec3<f32> {
             // diffuse surfaces before continuing the random walk.
             if rec.mat_type == MAT_LAMBERTIAN {
                 radiance += throughput * sun_direct_light(rec);
+            } else if rec.mat_type == MAT_EMISSIVE {
+                radiance += throughput * rec.albedo * sun.intensity;
             }
 
             let s = scatter(current_ray, rec);

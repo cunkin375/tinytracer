@@ -129,6 +129,8 @@ export function useThreeScene(
         new THREE.MeshBasicMaterial({ color: 0xfff4e6 })
       );
       sunCore.userData.isSunProxy = true;
+      sunCore.userData.isSphere = true;
+      sunCore.userData.materialType = 3; // MAT_EMISSIVE
       const sunGlow = new THREE.Mesh(
         new THREE.SphereGeometry(1.1, 24, 16),
         new THREE.MeshBasicMaterial({
@@ -264,6 +266,7 @@ export function useThreeScene(
             child.userData.isTraceable = true;
           }
         });
+        object.scale.setScalar(2.5);
         treeTemplate = object;
         rebalanceTreeCount();
       });

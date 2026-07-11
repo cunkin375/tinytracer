@@ -23,4 +23,4 @@ export const ORTHO_FRUSTUM_SIZE = 40;
 
 /** Initial tree count shown in the main app, and the tree-count slider's starting value. */
 export const DEFAULT_TREE_COUNT = 15;
-export const MAX_TREE_COUNT = 60;
+export const MAX_TREE_COUNT = 200;
