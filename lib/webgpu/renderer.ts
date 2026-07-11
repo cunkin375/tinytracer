@@ -34,6 +34,13 @@ const SPHERE_BYTE_STRIDE = 48;
 /** Each BVH Node is 8 floats × 4 bytes = 32 bytes. */
 const BVH_BYTE_STRIDE = 32;
 
+/**
+ * Sun uniform: 8 floats × 4 bytes = 32 bytes. Layout (std140) is
+ * vec3 direction + pad, then vec3 color + intensity — see `serializeSun`
+ * and the WGSL `SunLight` struct.
+ */
+const SUN_BUFFER_SIZE = 32;
+
 /** Workgroup dimensions — must match @workgroup_size in the shader. */
 const WORKGROUP_X = 16;
 const WORKGROUP_Y = 16;
@@ -53,6 +60,7 @@ export class WebGPUPathTracer {
   // Buffers
   private cameraBuffer: GPUBuffer;
   private stateBuffer: GPUBuffer;
+  private sunBuffer: GPUBuffer;
   private triangleBuffer: GPUBuffer | null = null;
   private sphereBuffer: GPUBuffer | null = null;
   private bvhBuffer: GPUBuffer | null = null;
@@ -76,6 +84,7 @@ export class WebGPUPathTracer {
     bindGroupLayout: GPUBindGroupLayout,
     cameraBuffer: GPUBuffer,
     stateBuffer: GPUBuffer,
+    sunBuffer: GPUBuffer,
     skyboxTexture: GPUTexture,
     skyboxSampler: GPUSampler,
     width: number,
@@ -87,6 +96,7 @@ export class WebGPUPathTracer {
     this.bindGroupLayout = bindGroupLayout;
     this.cameraBuffer = cameraBuffer;
     this.stateBuffer = stateBuffer;
+    this.sunBuffer = sunBuffer;
     this.skyboxTexture = skyboxTexture;
     this.skyboxSampler = skyboxSampler;
     this.width = width;
@@ -201,6 +211,12 @@ export class WebGPUPathTracer {
           visibility: GPUShaderStage.COMPUTE,
           sampler: { type: "filtering" },
         },
+        {
+          // @binding(8): Sun (directional light) uniform
+          binding: 8,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "uniform" },
+        },
       ],
     });
 
@@ -229,6 +245,12 @@ export class WebGPUPathTracer {
     const stateBuffer = device.createBuffer({
       label: "RenderState Uniform Buffer",
       size: STATE_BUFFER_SIZE,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    const sunBuffer = device.createBuffer({
+      label: "Sun Uniform Buffer",
+      size: SUN_BUFFER_SIZE,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
@@ -261,6 +283,7 @@ export class WebGPUPathTracer {
       bindGroupLayout,
       cameraBuffer,
       stateBuffer,
+      sunBuffer,
       skyboxTexture,
       skyboxSampler,
       width,
@@ -279,6 +302,7 @@ export class WebGPUPathTracer {
    * @param triangleCount Number of triangles in the array.
    * @param sphereData    Packed Float32Array from `serializeSpheres`.
    * @param sphereCount   Number of spheres in the array.
+   * @param sunData       Packed Float32Array from `serializeSun` (8 floats).
    */
   updateScene(
     triangleData: Float32Array,
@@ -286,8 +310,15 @@ export class WebGPUPathTracer {
     sphereData: Float32Array,
     sphereCount: number,
     bvhData: Float32Array,
-    bvhNodeCount: number
+    bvhNodeCount: number,
+    sunData: Float32Array
   ): void {
+    // Sun is a small fixed-size uniform — just overwrite it each update.
+    this.device.queue.writeBuffer(
+      this.sunBuffer, 0,
+      sunData.buffer, sunData.byteOffset, sunData.byteLength
+    );
+
     this.triangleBuffer = this.uploadStorage(
       this.triangleBuffer,
       triangleData,
@@ -419,6 +450,7 @@ export class WebGPUPathTracer {
         { binding: 5, resource: { buffer: this.bvhBuffer! } },
         { binding: 6, resource: this.skyboxTexture.createView() },
         { binding: 7, resource: this.skyboxSampler },
+        { binding: 8, resource: { buffer: this.sunBuffer } },
       ],
     });
 
@@ -480,6 +512,7 @@ export class WebGPUPathTracer {
   destroy(): void {
     this.cameraBuffer.destroy();
     this.stateBuffer.destroy();
+    this.sunBuffer.destroy();
     this.triangleBuffer?.destroy();
     this.sphereBuffer?.destroy();
     this.bvhBuffer?.destroy();

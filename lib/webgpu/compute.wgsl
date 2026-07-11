@@ -73,6 +73,16 @@ struct RenderState {
     height:       u32,
 }
 
+struct SunLight {
+    // Direction pointing *toward* the sun (the shadow-ray direction), normalized.
+    direction: vec3<f32>,
+    _pad:      f32,
+    // Linear RGB colour of the sun.
+    color:     vec3<f32>,
+    // Irradiance scale (Three.js DirectionalLight.intensity).
+    intensity: f32,
+}
+
 struct Ray {
     origin:    vec3<f32>,
     direction: vec3<f32>,
@@ -100,6 +110,7 @@ struct HitRecord {
 @group(0) @binding(5) var<storage, read> bvh_nodes: array<BVHNode>;
 @group(0) @binding(6) var skybox_texture: texture_2d<f32>;
 @group(0) @binding(7) var skybox_sampler: sampler;
+@group(0) @binding(8) var<uniform> sun: SunLight;
 
 // ── RNG: PCG Hash ───────────────────────────────────────────────────────────
 
@@ -348,6 +359,55 @@ fn hit_world(r: Ray, t_min: f32, t_max: f32, rec: ptr<function, HitRecord>) -> b
     return hit_anything;
 }
 
+/// Shadow query: return true as soon as *any* primitive is hit inside
+/// (t_min, t_max). Cheaper than {@link hit_world} because it stops at the
+/// first occluder instead of searching for the closest one. Used by the sun's
+/// next event estimation — a directional light is infinitely far away, so any
+/// intersection along the shadow ray blocks it.
+fn is_occluded(r: Ray, t_min: f32, t_max: f32) -> bool {
+    // Analytic spheres
+    for (var i = 0u; i < state.sphere_count; i++) {
+        var temp_rec: HitRecord;
+        if hit_sphere(r, spheres[i], t_min, t_max, &temp_rec) {
+            return true;
+        }
+    }
+
+    // BVH traversal for triangles
+    if (state.tri_count > 0u) {
+        var stack: array<u32, 64>;
+        var stack_ptr: u32 = 0u;
+        stack[stack_ptr] = 0u; // Push root
+        stack_ptr += 1u;
+
+        while (stack_ptr > 0u) {
+            stack_ptr -= 1u;
+            let node_idx = stack[stack_ptr];
+            let node = bvh_nodes[node_idx];
+
+            if hit_aabb(r, t_min, t_max, node.aabb_min, node.aabb_max) {
+                if (node.tri_count > 0u) {
+                    // Leaf node
+                    for (var i = 0u; i < node.tri_count; i++) {
+                        var temp_rec: HitRecord;
+                        if hit_triangle(r, triangles[node.left_first + i], t_min, t_max, &temp_rec) {
+                            return true;
+                        }
+                    }
+                } else {
+                    // Interior node - push children
+                    stack[stack_ptr] = node.left_first;
+                    stack_ptr += 1u;
+                    stack[stack_ptr] = node.left_first + 1u;
+                    stack_ptr += 1u;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
 // ── Material Scattering ─────────────────────────────────────────────────────
 
 fn reflect(v: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
@@ -458,32 +518,75 @@ fn sky_color(r: Ray) -> vec3<f32> {
     return textureSampleLevel(skybox_texture, skybox_sampler, vec2<f32>(u_repeated, v), 0.0).rgb;
 }
 
+// ── Direct Lighting (Sun / Next Event Estimation) ─────────────────────────────
+
+/// Direct contribution of the sun at a diffuse hit point, evaluated by casting
+/// a single shadow ray toward the (infinitely distant) directional light.
+/// Returns the outgoing radiance to add to the path, or zero if the sun is
+/// off, below the surface's horizon, or occluded.
+///
+/// This is next event estimation: because the sun is a delta light it can't be
+/// found by the randomly scattered bounce ray, so we sample it explicitly here.
+/// Only the Lambertian BRDF (albedo / π) is handled — specular/dielectric
+/// materials have a delta BRDF that a directional light almost never satisfies.
+fn sun_direct_light(rec: HitRecord) -> vec3<f32> {
+    if sun.intensity <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+
+    let to_sun = normalize(sun.direction);
+    let cos_theta = dot(rec.normal, to_sun);
+    if cos_theta <= 0.0 {
+        // Sun is below the surface's horizon — no direct light.
+        return vec3<f32>(0.0);
+    }
+
+    // Offset the origin along the normal to avoid shadow acne (self-shadowing
+    // caused by the point sitting fractionally inside the surface).
+    let shadow_origin = rec.p + rec.normal * EPSILON;
+    let shadow_ray = Ray(shadow_origin, to_sun);
+    if is_occluded(shadow_ray, EPSILON, MAX_FLOAT) {
+        return vec3<f32>(0.0);
+    }
+
+    // Lambertian BRDF = albedo / π; sun.intensity is treated as irradiance.
+    let brdf = rec.albedo / PI;
+    return brdf * sun.color * sun.intensity * cos_theta;
+}
+
 // ── Path Tracing ────────────────────────────────────────────────────────────
 
 fn trace(initial_ray: Ray) -> vec3<f32> {
-    var color       = vec3<f32>(1.0, 1.0, 1.0); // accumulated attenuation
+    var radiance    = vec3<f32>(0.0, 0.0, 0.0); // accumulated light
+    var throughput  = vec3<f32>(1.0, 1.0, 1.0); // path attenuation so far
     var current_ray = initial_ray;
 
     for (var bounce = 0u; bounce < MAX_BOUNCES; bounce++) {
         var rec: HitRecord;
 
         if hit_world(current_ray, EPSILON, MAX_FLOAT, &rec) {
+            // Next event estimation: add the sun's direct contribution at
+            // diffuse surfaces before continuing the random walk.
+            if rec.mat_type == MAT_LAMBERTIAN {
+                radiance += throughput * sun_direct_light(rec);
+            }
+
             let s = scatter(current_ray, rec);
             if s.did_scatter {
-                color       *= s.attenuation;
+                throughput  *= s.attenuation;
                 current_ray  = s.scattered;
             } else {
-                // Absorbed – return black
-                return vec3<f32>(0.0, 0.0, 0.0);
+                // Absorbed – stop; keep whatever direct light we gathered.
+                return radiance;
             }
         } else {
-            // Ray escaped – tint by sky
-            return color * sky_color(current_ray);
+            // Ray escaped – add the sky as an environment light and stop.
+            return radiance + throughput * sky_color(current_ray);
         }
     }
 
-    // Exceeded max bounces – ray was fully absorbed
-    return vec3<f32>(0.0, 0.0, 0.0);
+    // Exceeded max bounces – return the light gathered so far.
+    return radiance;
 }
 
 // ── Compute Entry Point ─────────────────────────────────────────────────────

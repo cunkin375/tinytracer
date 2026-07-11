@@ -1,0 +1,421 @@
+.dnb {
+  --cycle: 24s;
+}
+
+.dnb-sky {
+  position: absolute;
+  inset: 0;
+}
+
+.dnb-sky-night {
+  background: linear-gradient(to bottom, #05070f 0%, #0b1026 55%, #141b33 100%);
+  animation: dnb-night-opacity var(--cycle) linear infinite;
+}
+
+.dnb-sky-day {
+  background: linear-gradient(to bottom, #4fa8e0 0%, #8ec9ec 55%, #cfeaf7 100%);
+  animation: dnb-day-opacity var(--cycle) linear infinite;
+}
+
+.dnb-sky-horizon {
+  background: linear-gradient(
+    to bottom,
+    #ff8a5c 0%,
+    #ff6f91 35%,
+    #6b4a8a 70%,
+    #2a2352 100%
+  );
+  animation: dnb-horizon-opacity var(--cycle) linear infinite;
+}
+
+.dnb-stars {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(1.5px 1.5px at 10% 20%, #fff, transparent),
+    radial-gradient(1.5px 1.5px at 25% 55%, #fff, transparent),
+    radial-gradient(1px 1px at 40% 15%, #fff, transparent),
+    radial-gradient(1px 1px at 55% 40%, #fff, transparent),
+    radial-gradient(1.5px 1.5px at 70% 25%, #fff, transparent),
+    radial-gradient(1px 1px at 85% 10%, #fff, transparent),
+    radial-gradient(1.5px 1.5px at 90% 45%, #fff, transparent),
+    radial-gradient(1px 1px at 15% 65%, #fff, transparent),
+    radial-gradient(1px 1px at 65% 60%, #fff, transparent);
+  animation: dnb-night-opacity var(--cycle) linear infinite;
+}
+
+.dnb-sun {
+  position: absolute;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  animation: dnb-sun-move var(--cycle) linear infinite,
+    dnb-sun-opacity var(--cycle) linear infinite,
+    dnb-sun-color var(--cycle) linear infinite;
+}
+
+.dnb-ground {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 16%;
+  background: linear-gradient(to bottom, #1c2b1f 0%, #10190f 100%);
+}
+
+.dnb-panel {
+  position: absolute;
+  left: 16%;
+  bottom: 16%;
+}
+
+.dnb-panel-glow {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  width: 220px;
+  height: 140px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 241, 168, 0.9), rgba(255, 241, 168, 0) 70%);
+  filter: blur(4px);
+  animation: dnb-panel-power var(--cycle) linear infinite;
+}
+
+.dnb-panel-pole {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 8px;
+  height: 36px;
+  background: #2b2b33;
+  border-radius: 2px;
+  transform: translateX(-50%);
+}
+
+.dnb-panel-face {
+  position: absolute;
+  left: 50%;
+  bottom: 36px;
+  width: 150px;
+  height: 90px;
+  border-radius: 6px;
+  transform-origin: bottom center;
+  transform: translateX(-50%) rotate(-18deg) scaleY(0.55);
+  background-image: repeating-linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.18) 0 2px,
+      transparent 2px 34px
+    ),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.18) 0 2px, transparent 2px 34px),
+    linear-gradient(135deg, #22335c, #0d1730);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  animation: dnb-panel-brightness var(--cycle) linear infinite;
+}
+
+@keyframes dnb-night-opacity {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  6% {
+    opacity: 0;
+  }
+  90% {
+    opacity: 0;
+  }
+  96% {
+    opacity: 1;
+  }
+}
+
+@keyframes dnb-day-opacity {
+  0%,
+  14%,
+  86%,
+  100% {
+    opacity: 0;
+  }
+  26%,
+  72% {
+    opacity: 1;
+  }
+}
+
+@keyframes dnb-horizon-opacity {
+  0%,
+  4%,
+  18%,
+  74%,
+  92%,
+  100% {
+    opacity: 0;
+  }
+  10%,
+  84% {
+    opacity: 1;
+  }
+}
+
+/* A dense, evenly-stepped sampling of a true sine arc (left sweeps linearly,
+   top follows sin() of the swept angle) so the path reads as one smooth
+   curve instead of a few straight segments stitched together. */
+@keyframes dnb-sun-move {
+  0% {
+    left: 50%;
+    top: 108%;
+  }
+  5% {
+    left: 2%;
+    top: 82%;
+  }
+  7% {
+    left: 4.13%;
+    top: 76.7%;
+  }
+  9% {
+    left: 6.27%;
+    top: 71.42%;
+  }
+  11% {
+    left: 8.4%;
+    top: 66.2%;
+  }
+  13% {
+    left: 10.53%;
+    top: 61.05%;
+  }
+  15% {
+    left: 12.67%;
+    top: 56.01%;
+  }
+  17% {
+    left: 14.8%;
+    top: 51.09%;
+  }
+  19% {
+    left: 16.93%;
+    top: 46.32%;
+  }
+  21% {
+    left: 19.07%;
+    top: 41.73%;
+  }
+  23% {
+    left: 21.2%;
+    top: 37.33%;
+  }
+  25% {
+    left: 23.33%;
+    top: 33.15%;
+  }
+  27% {
+    left: 25.47%;
+    top: 29.21%;
+  }
+  29% {
+    left: 27.6%;
+    top: 25.52%;
+  }
+  31% {
+    left: 29.73%;
+    top: 22.11%;
+  }
+  33% {
+    left: 31.87%;
+    top: 18.99%;
+  }
+  35% {
+    left: 34%;
+    top: 16.18%;
+  }
+  37% {
+    left: 36.13%;
+    top: 13.69%;
+  }
+  39% {
+    left: 38.27%;
+    top: 11.53%;
+  }
+  41% {
+    left: 40.4%;
+    top: 9.72%;
+  }
+  43% {
+    left: 42.53%;
+    top: 8.26%;
+  }
+  45% {
+    left: 44.67%;
+    top: 7.15%;
+  }
+  47% {
+    left: 46.8%;
+    top: 6.42%;
+  }
+  49% {
+    left: 48.93%;
+    top: 6.05%;
+  }
+  51% {
+    left: 51.07%;
+    top: 6.05%;
+  }
+  53% {
+    left: 53.2%;
+    top: 6.42%;
+  }
+  55% {
+    left: 55.33%;
+    top: 7.15%;
+  }
+  57% {
+    left: 57.47%;
+    top: 8.26%;
+  }
+  59% {
+    left: 59.6%;
+    top: 9.72%;
+  }
+  61% {
+    left: 61.73%;
+    top: 11.53%;
+  }
+  63% {
+    left: 63.87%;
+    top: 13.69%;
+  }
+  65% {
+    left: 66%;
+    top: 16.18%;
+  }
+  67% {
+    left: 68.13%;
+    top: 18.99%;
+  }
+  69% {
+    left: 70.27%;
+    top: 22.11%;
+  }
+  71% {
+    left: 72.4%;
+    top: 25.52%;
+  }
+  73% {
+    left: 74.53%;
+    top: 29.21%;
+  }
+  75% {
+    left: 76.67%;
+    top: 33.15%;
+  }
+  77% {
+    left: 78.8%;
+    top: 37.33%;
+  }
+  79% {
+    left: 80.93%;
+    top: 41.73%;
+  }
+  81% {
+    left: 83.07%;
+    top: 46.32%;
+  }
+  83% {
+    left: 85.2%;
+    top: 51.09%;
+  }
+  85% {
+    left: 87.33%;
+    top: 56.01%;
+  }
+  87% {
+    left: 89.47%;
+    top: 61.05%;
+  }
+  89% {
+    left: 91.6%;
+    top: 66.2%;
+  }
+  91% {
+    left: 93.73%;
+    top: 71.42%;
+  }
+  93% {
+    left: 95.87%;
+    top: 76.7%;
+  }
+  95% {
+    left: 98%;
+    top: 82%;
+  }
+  100% {
+    left: 50%;
+    top: 108%;
+  }
+}
+
+@keyframes dnb-sun-opacity {
+  0%,
+  5%,
+  95%,
+  100% {
+    opacity: 0;
+  }
+  9%,
+  91% {
+    opacity: 1;
+  }
+}
+
+@keyframes dnb-sun-color {
+  0%,
+  100% {
+    background-color: #ff7a3d;
+    box-shadow: 0 0 60px 20px rgba(255, 122, 61, 0.5);
+  }
+  12% {
+    background-color: #ff9d52;
+    box-shadow: 0 0 70px 25px rgba(255, 157, 82, 0.55);
+  }
+  50% {
+    background-color: #fff6d6;
+    box-shadow: 0 0 100px 40px rgba(255, 246, 214, 0.75);
+  }
+  88% {
+    background-color: #ff8452;
+    box-shadow: 0 0 70px 25px rgba(255, 132, 82, 0.55);
+  }
+}
+
+@keyframes dnb-panel-power {
+  0%,
+  100% {
+    opacity: 0.08;
+  }
+  10% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 0.3;
+  }
+}
+
+@keyframes dnb-panel-brightness {
+  0%,
+  100% {
+    filter: brightness(0.55);
+  }
+  10% {
+    filter: brightness(0.8);
+  }
+  50% {
+    filter: brightness(1.3);
+  }
+  88% {
+    filter: brightness(0.8);
+  }
+}

@@ -100,8 +100,13 @@ export function useThreeScene(
       const ambientLight = new THREE.AmbientLight(0xc8c0e8, 0.6);
       scene.add(ambientLight);
 
+      // This directional light is the "sun": it lights the WebGL preview and
+      // is serialized into the path tracer (see serializeSun). Its target is
+      // added to the scene so its world transform — and thus the sun
+      // direction the tracer reads — stays well-defined as it's moved.
       const dirLight = new THREE.DirectionalLight(0xfff4e6, 1.8);
       dirLight.position.set(5, 8, 4);
+      dirLight.userData.isSun = true;
       dirLight.castShadow = true;
       dirLight.shadow.mapSize.set(2048, 2048);
       dirLight.shadow.camera.near = 0.5;
@@ -112,6 +117,7 @@ export function useThreeScene(
       dirLight.shadow.camera.bottom = -10;
       dirLight.shadow.bias = -0.001;
       scene.add(dirLight);
+      scene.add(dirLight.target);
 
       const fillLight = new THREE.DirectionalLight(0xa5b4fc, 0.4);
       fillLight.position.set(-4, 3, -2);
@@ -483,6 +489,7 @@ export function useThreeScene(
         pointer,
         addCar,
         setTreeCount,
+        sunLight: dirLight,
       };
 
       animate();
