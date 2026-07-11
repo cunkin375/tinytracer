@@ -2,7 +2,8 @@ import * as THREE from "three";
 
 const SKYBOX_TEXTURE_URL = "/skybox-texture.png";
 const SKYBOX_RADIUS = 90;
-const SKYBOX_HORIZONTAL_REPEAT = 3;
+const SKYBOX_HEIGHT = 90;
+const SKYBOX_HORIZONTAL_REPEAT = 4;
 
 let cachedTexture: THREE.Texture | null = null;
 const loader = new THREE.TextureLoader();
@@ -14,7 +15,7 @@ export async function preloadSkyboxTexture(): Promise<THREE.Texture> {
   const texture = await loader.loadAsync(SKYBOX_TEXTURE_URL);
   texture.colorSpace = THREE.SRGBColorSpace;
   // The source image is a single landscape painting, not a full 360°
-  // panorama, so it's tiled horizontally around the sphere instead.
+  // panorama, so it's tiled horizontally around the cylinder instead.
   texture.wrapS = THREE.RepeatWrapping;
   texture.repeat.x = SKYBOX_HORIZONTAL_REPEAT;
   cachedTexture = texture;
@@ -22,9 +23,13 @@ export async function preloadSkyboxTexture(): Promise<THREE.Texture> {
 }
 
 /**
- * A large inward-facing sphere painted with the skybox texture. Excluded
+ * A large inward-facing cylinder painted with the skybox texture. Excluded
  * from fog (it represents background/infinity, not scene geometry) and
  * from `selectables` (it's a backdrop, not an interactive object).
+ *
+ * Open-ended (no top/bottom caps) — there's no real zenith/nadir to show for
+ * this texture anyway, and it avoids cap UV distortion. `alignSkyboxToTerrain`
+ * (see terrain.ts) repositions it vertically once a terrain is loaded.
  */
 export function createSkybox(): THREE.Mesh {
   const texture = cachedTexture;
@@ -34,7 +39,14 @@ export function createSkybox(): THREE.Mesh {
     );
   }
 
-  const geometry = new THREE.SphereGeometry(SKYBOX_RADIUS, 60, 40);
+  const geometry = new THREE.CylinderGeometry(
+    SKYBOX_RADIUS,
+    SKYBOX_RADIUS,
+    SKYBOX_HEIGHT,
+    60,
+    1,
+    true
+  );
   const material = new THREE.MeshBasicMaterial({
     map: texture,
     side: THREE.BackSide,

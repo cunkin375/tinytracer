@@ -124,7 +124,7 @@
   #shape-list li button:hover { color: #ef4444; background: rgba(239,68,68,0.12); }
   #shape-list .empty-hint { font-size: 11px; color: var(--text-dim); padding: 6px 2px; }
 
-  .mode-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 4px; }
+  .mode-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 4px; }
   .mode-btn {
     display: flex;
     flex-direction: column;
@@ -229,6 +229,9 @@
     <button class="add-btn" data-type="Pyramid">
       <span class="swatch" style="background:#e0a3ac"></span> Pyramid
     </button>
+    <button class="add-btn" data-type="Terrain">
+      <span class="swatch" style="background:#6b8f5c"></span> Terrain
+    </button>
 
     <h2 class="spaced">Transform</h2>
     <div class="mode-row">
@@ -252,6 +255,12 @@
           <path d="M10 7h4l3 3v4" />
         </svg>
         Scale (S)
+      </button>
+      <button class="mode-btn" id="mode-sculpt" title="Sculpt terrain (H)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M3 18l4-8 4 5 3-6 4 4 3-9" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        Sculpt (H)
       </button>
     </div>
 
@@ -285,7 +294,7 @@
   </aside>
 
   <div id="viewport">
-    <div class="hint">Click to select · Shift+click for multiple · G Move · R Rotate · S Scale · Ctrl+Z Undo · Delete to remove</div>
+    <div class="hint">Click to select · Shift+click for multiple · G Move · R Rotate · S Scale · H Sculpt · Ctrl+Z Undo · Delete to remove</div>
   </div>
 
   <aside class="inspector" id="inspector">
@@ -323,7 +332,18 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 const DEFAULT_ROUGHNESS = 0.2;
 const DEFAULT_METALNESS = 0.6;
-const DEFAULT_COLOR = { Sphere: "#8cb4d9", Cube: "#dcb965", Pyramid: "#e0a3ac" };
+const DEFAULT_COLOR = { Sphere: "#8cb4d9", Cube: "#dcb965", Pyramid: "#e0a3ac", Terrain: "#6b8f5c" };
+
+// Chunky by default (see Triangle Size in the inspector): a small segment
+// count means big, flat-shaded triangles for a PS1-style low-poly terrain
+// instead of a smooth continuous surface.
+const TERRAIN_SIZE = 8;
+const TERRAIN_DEFAULT_TRIANGLE_SIZE = 1;
+const TERRAIN_HEIGHT_LIMIT = 8;
+
+function terrainSegmentsForTriangleSize(triangleSize) {
+  return Math.max(1, Math.round(TERRAIN_SIZE / triangleSize));
+}
 
 // ─── Three.js scene setup ────────────────────────────────────────────────
 
@@ -443,17 +463,32 @@ const modeButtons = {
   translate: document.getElementById("mode-translate"),
   rotate: document.getElementById("mode-rotate"),
   scale: document.getElementById("mode-scale"),
+  sculpt: document.getElementById("mode-sculpt"),
 };
 
+// "sculpt" isn't a TransformControls mode — it's a separate per-vertex drag
+// interaction (see the Sculpt section below), so the gizmo is just hidden
+// while it's active.
+let activeMode = "translate";
+
 function setTransformMode(mode) {
-  transformControls.setMode(mode);
+  activeMode = mode;
   modeButtons.translate.classList.toggle("active", mode === "translate");
   modeButtons.rotate.classList.toggle("active", mode === "rotate");
   modeButtons.scale.classList.toggle("active", mode === "scale");
+  modeButtons.sculpt.classList.toggle("active", mode === "sculpt");
+
+  if (mode === "sculpt") {
+    transformControls.detach();
+  } else {
+    transformControls.setMode(mode);
+    attachTransformControls();
+  }
 }
 modeButtons.translate.addEventListener("click", () => setTransformMode("translate"));
 modeButtons.rotate.addEventListener("click", () => setTransformMode("rotate"));
 modeButtons.scale.addEventListener("click", () => setTransformMode("scale"));
+modeButtons.sculpt.addEventListener("click", () => setTransformMode("sculpt"));
 
 function resize() {
   const w = viewport.clientWidth;
@@ -488,8 +523,23 @@ function buildMesh(shape) {
     geometry = new THREE.SphereGeometry(shape.radius, 64, 64);
   } else if (shape.type === "Cube") {
     geometry = new THREE.BoxGeometry(shape.size, shape.size, shape.size);
-  } else {
+  } else if (shape.type === "Pyramid") {
     geometry = new THREE.ConeGeometry(shape.radius, shape.height, 4);
+  } else {
+    // Terrain: a low-segment plane, rotated flat *before* heights are
+    // applied so `position.setY` below is already the "up" axis.
+    geometry = new THREE.PlaneGeometry(
+      shape.width,
+      shape.depth,
+      shape.segments,
+      shape.segments
+    );
+    geometry.rotateX(-Math.PI / 2);
+    const position = geometry.getAttribute("position");
+    for (let i = 0; i < position.count; i++) {
+      position.setY(i, shape.heights[i] ?? 0);
+    }
+    position.needsUpdate = true;
   }
   const [sx, sy, sz] = shape.scale;
   if (sx !== 1 || sy !== 1 || sz !== 1) geometry.scale(sx, sy, sz);
@@ -498,6 +548,7 @@ function buildMesh(shape) {
     color: shape.color,
     roughness: shape.roughness,
     metalness: shape.metalness,
+    flatShading: shape.type === "Terrain",
   });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set(shape.position[0], shape.position[1], shape.position[2]);
@@ -505,13 +556,38 @@ function buildMesh(shape) {
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   mesh.userData.shapeId = shape.id;
+
+  if (shape.type === "Terrain") {
+    // Shares the *same* geometry as the solid mesh (not a clone), so live
+    // sculpting — which mutates that geometry's position attribute in
+    // place — updates this overlay for free with no extra rebuild.
+    const gridMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.35,
+      depthTest: true,
+    });
+    const grid = new THREE.Mesh(geometry, gridMaterial);
+    grid.renderOrder = 1;
+    mesh.add(grid);
+  }
+
   return mesh;
 }
 
+// Disposes a shape's mesh and any child overlay it owns (currently just the
+// Terrain grid, which shares its parent's geometry — only its own material
+// needs disposing separately).
+function disposeShapeMesh(mesh) {
+  scene.remove(mesh);
+  mesh.geometry.dispose();
+  mesh.material.dispose();
+  mesh.children.forEach((child) => child.material?.dispose());
+}
+
 function refreshMesh(shape) {
-  scene.remove(shape.mesh);
-  shape.mesh.geometry.dispose();
-  shape.mesh.material.dispose();
+  disposeShapeMesh(shape.mesh);
   shape.mesh = buildMesh(shape);
   scene.add(shape.mesh);
 }
@@ -578,13 +654,22 @@ let redoStack = [];
 // undoes in one Ctrl+Z instead of dozens.
 let undoSessionActive = false;
 
-function snapshotShapes() {
-  return shapes.map(({ mesh, ...data }) => ({
+// Deep-clones the array-valued fields on a shape's plain data (position,
+// rotation, scale, and Terrain's per-vertex heights) so duplicates/undo
+// snapshots/redo never alias the live shape's arrays.
+function cloneShapeData(data) {
+  const clone = {
     ...data,
     position: [...data.position],
     rotation: [...data.rotation],
     scale: [...data.scale],
-  }));
+  };
+  if (data.heights) clone.heights = [...data.heights];
+  return clone;
+}
+
+function snapshotShapes() {
+  return shapes.map(({ mesh, ...data }) => cloneShapeData(data));
 }
 
 function pushUndo() {
@@ -604,19 +689,10 @@ function endUndoSession() {
 }
 
 function restoreSnapshot(snapshot) {
-  shapes.forEach((s) => {
-    scene.remove(s.mesh);
-    s.mesh.geometry.dispose();
-    s.mesh.material.dispose();
-  });
+  shapes.forEach((s) => disposeShapeMesh(s.mesh));
   shapes.length = 0;
   snapshot.forEach((data) => {
-    const shape = {
-      ...data,
-      position: [...data.position],
-      rotation: [...data.rotation],
-      scale: [...data.scale],
-    };
+    const shape = cloneShapeData(data);
     shape.mesh = buildMesh(shape);
     scene.add(shape.mesh);
     shapes.push(shape);
@@ -648,7 +724,9 @@ function addShape(type) {
     color: DEFAULT_COLOR[type],
     roughness: DEFAULT_ROUGHNESS,
     metalness: DEFAULT_METALNESS,
-    position: [0, 0.5, 0],
+    // Terrain sits flush on the ground like the grid does; everything else
+    // spawns slightly above it.
+    position: type === "Terrain" ? [0, 0, 0] : [0, 0.5, 0],
     // Pyramids start with their flat face forward instead of an edge; the
     // gizmo's Rotate mode can turn any shape further from there.
     rotation: type === "Pyramid" ? [0, Math.PI / 4, 0] : [0, 0, 0],
@@ -656,7 +734,14 @@ function addShape(type) {
   };
   if (type === "Sphere") shape.radius = 0.5;
   else if (type === "Cube") shape.size = 1;
-  else { shape.radius = 0.6; shape.height = 1; }
+  else if (type === "Pyramid") { shape.radius = 0.6; shape.height = 1; }
+  else {
+    shape.width = TERRAIN_SIZE;
+    shape.depth = TERRAIN_SIZE;
+    shape.triangleSize = TERRAIN_DEFAULT_TRIANGLE_SIZE;
+    shape.segments = terrainSegmentsForTriangleSize(shape.triangleSize);
+    shape.heights = new Array((shape.segments + 1) * (shape.segments + 1)).fill(0);
+  }
 
   shape.mesh = buildMesh(shape);
   scene.add(shape.mesh);
@@ -669,11 +754,9 @@ function duplicateShape(id) {
   const original = shapes.find((s) => s.id === id);
   if (!original) return;
   pushUndo();
-  const copy = { ...original, id: nextId++ };
+  const copy = cloneShapeData(original);
+  copy.id = nextId++;
   copy.position = [original.position[0] + 0.4, original.position[1], original.position[2] + 0.4];
-  copy.rotation = [...original.rotation];
-  copy.scale = [...original.scale];
-  delete copy.mesh;
   copy.mesh = buildMesh(copy);
   scene.add(copy.mesh);
   shapes.push(copy);
@@ -687,11 +770,9 @@ function duplicateSelection() {
   pushUndo();
   const newIds = [];
   originals.forEach((original) => {
-    const copy = { ...original, id: nextId++ };
+    const copy = cloneShapeData(original);
+    copy.id = nextId++;
     copy.position = [original.position[0] + 0.4, original.position[1], original.position[2] + 0.4];
-    copy.rotation = [...original.rotation];
-    copy.scale = [...original.scale];
-    delete copy.mesh;
     copy.mesh = buildMesh(copy);
     scene.add(copy.mesh);
     shapes.push(copy);
@@ -709,9 +790,7 @@ function deleteShape(id) {
   pushUndo();
   const shape = shapes[idx];
   selectedIds.delete(id);
-  scene.remove(shape.mesh);
-  shape.mesh.geometry.dispose();
-  shape.mesh.material.dispose();
+  disposeShapeMesh(shape.mesh);
   shapes.splice(idx, 1);
   attachTransformControls();
   renderShapeList();
@@ -724,10 +803,7 @@ function deleteSelected() {
   [...selectedIds].forEach((id) => {
     const idx = shapes.findIndex((s) => s.id === id);
     if (idx === -1) return;
-    const shape = shapes[idx];
-    scene.remove(shape.mesh);
-    shape.mesh.geometry.dispose();
-    shape.mesh.material.dispose();
+    disposeShapeMesh(shapes[idx].mesh);
     shapes.splice(idx, 1);
   });
   selectedIds.clear();
@@ -740,11 +816,7 @@ function clearAll() {
   pushUndo();
   selectedIds.clear();
   attachTransformControls();
-  shapes.forEach((s) => {
-    scene.remove(s.mesh);
-    s.mesh.geometry.dispose();
-    s.mesh.material.dispose();
-  });
+  shapes.forEach((s) => disposeShapeMesh(s.mesh));
   shapes.length = 0;
   renderShapeList();
   renderInspector();
@@ -869,8 +941,42 @@ function renderInspector() {
   const typeLabel = document.createElement("p");
   typeLabel.className = "empty-hint";
   typeLabel.style.marginBottom = "14px";
-  typeLabel.textContent = shape.type + " — drag the gizmo in the viewport to move, rotate, or resize";
+  typeLabel.textContent =
+    shape.type === "Terrain"
+      ? "Terrain — switch to Sculpt (H), then drag a point on the surface to raise or lower it"
+      : shape.type + " — drag the gizmo in the viewport to move, rotate, or resize";
   inspectorEl.appendChild(typeLabel);
+
+  if (shape.type === "Terrain") {
+    const triWrap = document.createElement("div");
+    triWrap.className = "field";
+    const triLabel = document.createElement("label");
+    triLabel.textContent = "Triangle size";
+    const triInput = document.createElement("input");
+    triInput.type = "number";
+    triInput.step = 0.25;
+    triInput.min = 0.25;
+    triInput.value = shape.triangleSize;
+    triInput.addEventListener("change", () => {
+      const newSize = Math.max(0.25, parseFloat(triInput.value) || shape.triangleSize);
+      if (newSize === shape.triangleSize) return;
+      const hasSculpting = shape.heights.some((h) => h !== 0);
+      if (hasSculpting && !confirm("Changing triangle size resets this terrain's sculpted heights. Continue?")) {
+        triInput.value = shape.triangleSize;
+        return;
+      }
+      pushUndo();
+      shape.triangleSize = newSize;
+      shape.segments = terrainSegmentsForTriangleSize(newSize);
+      shape.heights = new Array((shape.segments + 1) * (shape.segments + 1)).fill(0);
+      refreshMesh(shape);
+      attachTransformControls();
+      renderShapeList();
+    });
+    triWrap.appendChild(triLabel);
+    triWrap.appendChild(triInput);
+    inspectorEl.appendChild(triWrap);
+  }
 
   // Color
   const colorWrap = document.createElement("div");
@@ -914,6 +1020,21 @@ function renderInspector() {
   dupBtn.textContent = "Duplicate";
   dupBtn.addEventListener("click", () => duplicateShape(shape.id));
   actions.appendChild(dupBtn);
+
+  if (shape.type === "Terrain") {
+    const flattenBtn = document.createElement("button");
+    flattenBtn.className = "ghost-btn";
+    flattenBtn.style.width = "100%";
+    flattenBtn.textContent = "Flatten";
+    flattenBtn.addEventListener("click", () => {
+      pushUndo();
+      shape.heights.fill(0);
+      refreshMesh(shape);
+      attachTransformControls();
+    });
+    actions.appendChild(flattenBtn);
+  }
+
   inspectorEl.appendChild(actions);
 }
 
@@ -935,12 +1056,82 @@ document.getElementById("clear-btn").addEventListener("click", () => {
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 
+// ─── Terrain sculpting ───────────────────────────────────────────────────
+
+// TransformControls only ever moves a whole Object3D, so raising a single
+// vertex is a separate hand-rolled drag: pick the geometry vertex nearest
+// the click (in the mesh's local space, ignoring height so you can grab a
+// vertex regardless of how tall it already is), then map vertical mouse
+// movement directly onto that one vertex's height.
+const SCULPT_SENSITIVITY = 0.02;
+let sculptDrag = null; // { shape, vertexIndex, startClientY, startHeight }
+
+function findNearestVertex(shape, worldPoint) {
+  const local = shape.mesh.worldToLocal(worldPoint.clone());
+  const position = shape.mesh.geometry.getAttribute("position");
+  let closestIndex = 0;
+  let closestDistSq = Infinity;
+  for (let i = 0; i < position.count; i++) {
+    const dx = position.getX(i) - local.x;
+    const dz = position.getZ(i) - local.z;
+    const distSq = dx * dx + dz * dz;
+    if (distSq < closestDistSq) {
+      closestDistSq = distSq;
+      closestIndex = i;
+    }
+  }
+  return closestIndex;
+}
+
+function startSculptDrag(shape, vertexIndex, clientY) {
+  pushUndo();
+  sculptDrag = { shape, vertexIndex, startClientY: clientY, startHeight: shape.heights[vertexIndex] };
+  orbitControls.enabled = false;
+}
+
+function updateSculptDrag(clientY) {
+  const { shape, vertexIndex, startClientY, startHeight } = sculptDrag;
+  const delta = startClientY - clientY; // dragging up raises the vertex
+  const height = Math.max(
+    -TERRAIN_HEIGHT_LIMIT,
+    Math.min(TERRAIN_HEIGHT_LIMIT, startHeight + delta * SCULPT_SENSITIVITY)
+  );
+  shape.heights[vertexIndex] = height;
+  const position = shape.mesh.geometry.getAttribute("position");
+  position.setY(vertexIndex, height);
+  position.needsUpdate = true;
+  shape.mesh.geometry.computeBoundingSphere();
+}
+
+function endSculptDrag() {
+  sculptDrag = null;
+  orbitControls.enabled = true;
+}
+
+window.addEventListener("pointermove", (event) => {
+  if (sculptDrag) updateSculptDrag(event.clientY);
+});
+window.addEventListener("pointerup", () => {
+  if (sculptDrag) endSculptDrag();
+});
+
 renderer.domElement.addEventListener("pointerdown", (event) => {
   if (transformControls.dragging) return;
   const rect = renderer.domElement.getBoundingClientRect();
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
+
+  if (activeMode === "sculpt" && selectedIds.size === 1) {
+    const shape = shapes.find((s) => selectedIds.has(s.id));
+    if (shape && shape.type === "Terrain") {
+      const terrainHits = raycaster.intersectObject(shape.mesh, false);
+      if (terrainHits.length > 0) {
+        startSculptDrag(shape, findNearestVertex(shape, terrainHits[0].point), event.clientY);
+        return;
+      }
+    }
+  }
 
   const hits = raycaster.intersectObjects(shapes.map((s) => s.mesh), false);
   if (hits.length > 0) {
@@ -999,6 +1190,9 @@ window.addEventListener("keydown", (e) => {
       break;
     case "s":
       setTransformMode("scale");
+      break;
+    case "h":
+      setTransformMode("sculpt");
       break;
     case "delete":
     case "backspace":
@@ -1115,7 +1309,8 @@ function averageMaterial(shapeList) {
 
 function generateObjUsageSnippet(className, shapeList) {
   const { roughness, metalness } = averageMaterial(shapeList);
-  return [
+  const isTerrain = shapeList.some((s) => s.type === "Terrain");
+  const lines = [
     `import { OBJLoader } from "three/addons/loaders/OBJLoader.js";`,
     ``,
     `new OBJLoader().load("/models/${className}.obj", (object) => {`,
@@ -1137,9 +1332,22 @@ function generateObjUsageSnippet(className, shapeList) {
     `      selectables.push(child);`,
     `    }`,
     `  });`,
-    `});`,
-    ``,
-  ].join("\n");
+  ];
+  if (isTerrain) {
+    lines.push(
+      `  // Level the skybox with this terrain and drop every object already`,
+      `  // in the scene onto its surface so nothing clips underneath it.`,
+      `  registerTerrain(object);`
+    );
+  } else {
+    lines.push(
+      `  // Snap onto the terrain if one's already loaded, or queue to snap`,
+      `  // onto it once one arrives.`,
+      `  registerSceneObject(object);`
+    );
+  }
+  lines.push(`});`, ``);
+  return lines.join("\n");
 }
 
 // ─── Export dialog ────────────────────────────────────────────────────────

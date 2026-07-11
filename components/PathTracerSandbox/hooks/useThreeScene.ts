@@ -12,6 +12,7 @@ import { Sphere } from "../objects/Sphere";
 import { createSceneCubes } from "../objects/sceneCubes";
 import { createScenePyramids } from "../objects/scenePyramids";
 import { createSceneSpheres } from "../objects/sceneSpheres";
+import { alignSkyboxToTerrain, snapObjectToTerrain } from "../objects/terrain";
 import type { CameraMode, SceneRefs } from "../types";
 
 /**
@@ -69,7 +70,8 @@ export function useThreeScene(
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0x12121a);
       scene.fog = new THREE.Fog(0x12121a, 20, 50);
-      scene.add(createSkybox());
+      const skybox = createSkybox();
+      scene.add(skybox);
 
       // ── Cameras ──────────────────────────────────────────────────────────
       // far=200 gives headroom beyond the skybox sphere (radius 90) so it
@@ -132,6 +134,36 @@ export function useThreeScene(
       grid.position.y = 0.005;
       scene.add(grid);
 
+      // ── Terrain registry ─────────────────────────────────────────────────
+      // Objects can load in any order (spheres/cubes/pyramids synchronously,
+      // Tree/Car/a future Terrain via async .load() calls). Whichever
+      // terrain shows up first snaps everything already waiting onto its
+      // surface and levels the skybox with it; anything added afterward
+      // checks in via registerSceneObject and snaps immediately.
+
+      let terrainObject: THREE.Object3D | null = null;
+      const pendingSnapObjects: THREE.Object3D[] = [];
+
+      const registerSceneObject = (object: THREE.Object3D) => {
+        if (terrainObject) {
+          snapObjectToTerrain(object, terrainObject);
+        } else {
+          pendingSnapObjects.push(object);
+        }
+      };
+
+      // Not called anywhere yet — the shape editor's "Terrain" export
+      // generates a `registerTerrain(object)` call in its usage snippet
+      // (see generateObjUsageSnippet in public/shape-editor.html), the same
+      // way the Tree/Car loading blocks above were pasted in.
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const registerTerrain = (terrain: THREE.Object3D) => {
+        terrainObject = terrain;
+        alignSkyboxToTerrain(skybox, terrain);
+        pendingSnapObjects.forEach((object) => snapObjectToTerrain(object, terrain));
+        pendingSnapObjects.length = 0;
+      };
+
       // ── Spheres ──────────────────────────────────────────────────────────
 
       const selectables: THREE.Mesh[] = [];
@@ -139,6 +171,7 @@ export function useThreeScene(
       createSceneSpheres().forEach((sphere) => {
         scene.add(sphere);
         selectables.push(sphere);
+        registerSceneObject(sphere);
       });
 
       // ── Cubes ────────────────────────────────────────────────────────────
@@ -146,6 +179,7 @@ export function useThreeScene(
       createSceneCubes().forEach((cube) => {
         scene.add(cube);
         selectables.push(cube);
+        registerSceneObject(cube);
       });
 
       // ── Pyramids ─────────────────────────────────────────────────────────
@@ -153,10 +187,8 @@ export function useThreeScene(
       createScenePyramids().forEach((pyramid) => {
         scene.add(pyramid);
         selectables.push(pyramid);
+        registerSceneObject(pyramid);
       });
-
-
-
 
       new OBJLoader().load("/models/Tree.obj", (object) => {
         const material = new THREE.MeshStandardMaterial({
@@ -174,8 +206,8 @@ export function useThreeScene(
             selectables.push(child);
           }
         });
+        registerSceneObject(object);
       });
-
 
       new OBJLoader().load("/models/Car.obj", (object) => {
       const material = new THREE.MeshStandardMaterial({
@@ -197,9 +229,34 @@ export function useThreeScene(
           selectables.push(child);
         }
       });
-    });
+      registerSceneObject(object);
+      });
 
-      
+
+      new OBJLoader().load("/models/Terrain.obj", (object) => {
+        const material = new THREE.MeshStandardMaterial({
+          vertexColors: true,
+          roughness: 0.20,
+          metalness: 0.60,
+        });
+        // Rest the model's bottom on the floor regardless of how it was
+        // positioned in the editor.
+        const bounds = new THREE.Box3().setFromObject(object);
+        object.position.y -= bounds.min.y;
+        scene.add(object);
+        object.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.material = material;
+            child.castShadow = true;
+            child.receiveShadow = true;
+            selectables.push(child);
+          }
+        });
+        // Level the skybox with this terrain and drop every object already
+        // in the scene onto its surface so nothing clips underneath it.
+        registerTerrain(object);
+      });
+
 
       // ── Controls ─────────────────────────────────────────────────────────
 
