@@ -32,6 +32,17 @@ export const FLOATS_PER_TRIANGLE = 20;
 /** Number of f32 values per BVHNode struct (8 floats = 32 bytes). */
 export const FLOATS_PER_BVH_NODE = 8;
 
+/**
+ * Number of f32 values in the SunLight struct. Matches the WGSL `SunLight`
+ * uniform (std140), which pads the leading vec3 up to a 16-byte boundary:
+ * ```
+ *  float index:   0   1   2    3     4   5   6    7
+ *  meaning:      dx  dy  dz  _pad   cr  cg  cb  intensity
+ * ```
+ * `direction` points *toward* the sun (the shadow-ray direction), normalized.
+ */
+export const FLOATS_PER_SUN = 8;
+
 interface BVHPrimitive {
   v0: THREE.Vector3;
   v1: THREE.Vector3;
@@ -455,6 +466,73 @@ export function serializeCamera(
 
   // FOV in radians
   data[15] = camera.fov * (Math.PI / 180);
+
+  return data;
+}
+
+// ── Sun Serialization ───────────────────────────────────────────────────────
+
+/** Reusable scratch to avoid per-frame allocations in {@link serializeSun}. */
+const _sunPos = new THREE.Vector3();
+const _sunTarget = new THREE.Vector3();
+const _sunDir = new THREE.Vector3();
+
+/**
+ * Find the scene's sun (a `THREE.DirectionalLight` tagged
+ * `userData.isSun`, falling back to the first directional light) and pack it
+ * into an 8-float `Float32Array` matching the WGSL `SunLight` uniform:
+ *
+ * ```
+ *  float index:   0   1   2    3     4   5   6    7
+ *  meaning:      dx  dy  dz  _pad   cr  cg  cb  intensity
+ * ```
+ *
+ * `direction` is normalized and points *from the scene toward the sun* — i.e.
+ * the direction a shadow ray travels — computed as `lightPos - targetPos` so
+ * it tracks the light's Three.js transform. When no directional light exists,
+ * a downward placeholder with zero intensity is returned so the shader's next
+ * event estimation contributes nothing rather than reading uninitialized data.
+ */
+export function serializeSun(scene: THREE.Scene): Float32Array {
+  scene.updateMatrixWorld(true);
+
+  const tagged: THREE.DirectionalLight[] = [];
+  const anyDirectional: THREE.DirectionalLight[] = [];
+  scene.traverse((obj) => {
+    if (obj instanceof THREE.DirectionalLight) {
+      anyDirectional.push(obj);
+      if (obj.userData.isSun === true) tagged.push(obj);
+    }
+  });
+
+  const sun = tagged[0] ?? anyDirectional[0] ?? null;
+  const data = new Float32Array(FLOATS_PER_SUN);
+
+  if (!sun) {
+    // No sun in the scene: point straight down with zero intensity so NEE
+    // adds nothing and the surrounding data stays well-defined.
+    data[1] = -1; // direction.y (arbitrary; intensity 0 makes it inert)
+    data[4] = 1;
+    data[5] = 1;
+    data[6] = 1;
+    data[7] = 0; // intensity
+    return data;
+  }
+
+  // Direction toward the sun = normalize(lightWorldPos - targetWorldPos).
+  sun.getWorldPosition(_sunPos);
+  sun.target.getWorldPosition(_sunTarget);
+  _sunDir.subVectors(_sunPos, _sunTarget).normalize();
+
+  data[0] = _sunDir.x;
+  data[1] = _sunDir.y;
+  data[2] = _sunDir.z;
+  data[3] = 0; // pad
+
+  data[4] = sun.color.r;
+  data[5] = sun.color.g;
+  data[6] = sun.color.b;
+  data[7] = sun.intensity;
 
   return data;
 }

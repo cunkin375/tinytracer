@@ -18,4 +18,18 @@ export interface SceneRefs {
   selectedObject: THREE.Mesh | null;
   raycaster: THREE.Raycaster;
   pointer: THREE.Vector2;
+  /** The directional light the path tracer treats as the sun. */
+  sunLight: THREE.DirectionalLight;
+}
+
+/** User-adjustable sun parameters, surfaced in the sun control panel. */
+export interface SunSettings {
+  /** Compass angle in degrees (rotation around the vertical axis). */
+  azimuth: number;
+  /** Height above the horizon in degrees (0 = horizon, 90 = straight up). */
+  elevation: number;
+  /** Light intensity (irradiance). */
+  intensity: number;
+  /** Hex colour string, e.g. "#fff4e6". */
+  color: string;
 }

@@ -8,6 +8,7 @@ import {
   FLOATS_PER_BVH_NODE,
   serializeCamera,
   serializeSpheres,
+  serializeSun,
   serializeTriangles,
 } from "@/lib/webgpu/serializer";
 import { preloadSkyboxTexture } from "../objects/Skybox";
@@ -87,7 +88,8 @@ export function usePathTracer(
         const bvhNodeCount = bvhData.length / FLOATS_PER_BVH_NODE;
         const sphereData = serializeSpheres(scene);
         const sphereCount = sphereData.length / FLOATS_PER_SPHERE;
-        tracer.updateScene(triangleData, triangleCount, sphereData, sphereCount, bvhData, bvhNodeCount);
+        const sunData = serializeSun(scene);
+        tracer.updateScene(triangleData, triangleCount, sphereData, sphereCount, bvhData, bvhNodeCount, sunData);
 
         const cameraData = serializeCamera(camera);
         tracer.dispatchCompute(cameraData, 1, triangleCount, sphereCount);

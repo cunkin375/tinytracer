@@ -1,15 +1,23 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
-import type { CameraMode, OrthoView, SceneRefs, TransformMode } from "./types";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  CameraMode,
+  OrthoView,
+  SceneRefs,
+  SunSettings,
+  TransformMode,
+} from "./types";
 import { useThreeScene } from "./hooks/useThreeScene";
 import { useCameraMode } from "./hooks/useCameraMode";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { usePathTracer } from "./hooks/usePathTracer";
 import { TopBar } from "./components/TopBar";
 import { LeftPanel } from "./components/LeftPanel";
+import { SunPanel } from "./components/SunPanel";
 import { BottomStatusBar } from "./components/BottomStatusBar";
 import { PathTracerOutput } from "./components/PathTracerOutput";
+import { applySunSettings, DEFAULT_SUN } from "./sun";
 import "./PathTracerSandbox.css";
 
 export default function PathTracerSandbox() {
@@ -20,6 +28,8 @@ export default function PathTracerSandbox() {
   const [cameraMode, setCameraMode] = useState<CameraMode>("perspective");
   const [orthoView, setOrthoView] = useState<OrthoView>("front");
   const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [sun, setSun] = useState<SunSettings>(DEFAULT_SUN);
+  const [sunPanelOpen, setSunPanelOpen] = useState(false);
   // Sphere/Cube/Pyramid geometry now loads from .obj files asynchronously,
   // so the scene isn't ready the instant these hooks are called — see
   // useThreeScene's onReady callback and useCameraMode's sceneReady param.
@@ -29,6 +39,16 @@ export default function PathTracerSandbox() {
     setSceneReady(true)
   );
   useCameraMode(sceneRef, cameraModeRef, cameraMode, orthoView, sceneReady);
+
+  // Push the sun settings onto the Three.js light. Runs whenever the settings
+  // change and once the scene is ready (so the initial state is applied). The
+  // WebGL preview reflects it live via its own render loop; the path tracer
+  // reads the same light when Run is pressed (see serializeSun).
+  useEffect(() => {
+    const light = sceneRef.current?.sunLight;
+    if (!sceneReady || !light) return;
+    applySunSettings(light, sun);
+  }, [sun, sceneReady]);
 
   const {
     outputCanvasRef,
@@ -100,6 +120,15 @@ export default function PathTracerSandbox() {
         onToggleOrthoView={handleOrthoViewToggle}
         onSetTransformMode={setTransformMode}
       />
+
+      {!isTracing && (
+        <SunPanel
+          sun={sun}
+          open={sunPanelOpen}
+          onToggle={() => setSunPanelOpen((o) => !o)}
+          onChange={setSun}
+        />
+      )}
 
       <BottomStatusBar
         cameraMode={cameraMode}
