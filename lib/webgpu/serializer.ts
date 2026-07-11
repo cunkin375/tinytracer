@@ -213,6 +213,7 @@ export function serializeTriangles(scene: THREE.Scene): { triangleData: Float32A
     const world = mesh.matrixWorld;
 
     const position = geometry.attributes.position as THREE.BufferAttribute;
+    const colorAttr = geometry.attributes.color as THREE.BufferAttribute | undefined;
     const index = geometry.index;
     const triCount = (index ? index.count : position.count) / 3;
 
@@ -227,7 +228,21 @@ export function serializeTriangles(scene: THREE.Scene): { triangleData: Float32A
       
       const centroid = new THREE.Vector3().add(v0).add(v1).add(v2).multiplyScalar(1 / 3);
 
-      primitives.push({ v0, v1, v2, centroid, mat });
+      let triMat = mat;
+      if (colorAttr) {
+        const c0 = new THREE.Color().fromBufferAttribute(colorAttr, i0);
+        const c1 = new THREE.Color().fromBufferAttribute(colorAttr, i1);
+        const c2 = new THREE.Color().fromBufferAttribute(colorAttr, i2);
+        
+        triMat = {
+          ...mat,
+          r: mat.r * (c0.r + c1.r + c2.r) / 3,
+          g: mat.g * (c0.g + c1.g + c2.g) / 3,
+          b: mat.b * (c0.b + c1.b + c2.b) / 3,
+        };
+      }
+
+      primitives.push({ v0, v1, v2, centroid, mat: triMat });
     }
   }
 

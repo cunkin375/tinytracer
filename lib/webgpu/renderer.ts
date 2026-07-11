@@ -56,6 +56,8 @@ export class WebGPUPathTracer {
   private triangleBuffer: GPUBuffer | null = null;
   private sphereBuffer: GPUBuffer | null = null;
   private bvhBuffer: GPUBuffer | null = null;
+  private skyboxTexture: GPUTexture;
+  private skyboxSampler: GPUSampler;
 
   // Tracking
   private currentTriangleCapacity = 0;
@@ -74,6 +76,8 @@ export class WebGPUPathTracer {
     bindGroupLayout: GPUBindGroupLayout,
     cameraBuffer: GPUBuffer,
     stateBuffer: GPUBuffer,
+    skyboxTexture: GPUTexture,
+    skyboxSampler: GPUSampler,
     width: number,
     height: number
   ) {
@@ -83,6 +87,8 @@ export class WebGPUPathTracer {
     this.bindGroupLayout = bindGroupLayout;
     this.cameraBuffer = cameraBuffer;
     this.stateBuffer = stateBuffer;
+    this.skyboxTexture = skyboxTexture;
+    this.skyboxSampler = skyboxSampler;
     this.width = width;
     this.height = height;
   }
@@ -94,7 +100,7 @@ export class WebGPUPathTracer {
    *
    * @throws If WebGPU is not supported or the adapter/device cannot be obtained.
    */
-  static async create(canvas: HTMLCanvasElement): Promise<WebGPUPathTracer> {
+  static async create(canvas: HTMLCanvasElement, skyboxImage: HTMLImageElement | ImageBitmap): Promise<WebGPUPathTracer> {
     // ── 1. Request adapter & device ─────────────────────────────────────
     if (!navigator.gpu) {
       throw new Error(
@@ -183,6 +189,18 @@ export class WebGPUPathTracer {
           visibility: GPUShaderStage.COMPUTE,
           buffer: { type: "read-only-storage" },
         },
+        {
+          // @binding(6): Skybox texture
+          binding: 6,
+          visibility: GPUShaderStage.COMPUTE,
+          texture: { sampleType: "float", viewDimension: "2d" },
+        },
+        {
+          // @binding(7): Skybox sampler
+          binding: 7,
+          visibility: GPUShaderStage.COMPUTE,
+          sampler: { type: "filtering" },
+        },
       ],
     });
 
@@ -214,6 +232,28 @@ export class WebGPUPathTracer {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
+    // ── 7. Upload Skybox Texture ────────────────────────────────────────
+    const skyboxTexture = device.createTexture({
+      label: "Skybox Texture",
+      size: [skyboxImage.width, skyboxImage.height, 1],
+      format: "rgba8unorm-srgb", // Use sRGB format to get linear reads in shader
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+
+    device.queue.copyExternalImageToTexture(
+      { source: skyboxImage, flipY: false },
+      { texture: skyboxTexture },
+      [skyboxImage.width, skyboxImage.height]
+    );
+
+    const skyboxSampler = device.createSampler({
+      label: "Skybox Sampler",
+      magFilter: "linear",
+      minFilter: "linear",
+      addressModeU: "repeat",
+      addressModeV: "clamp-to-edge",
+    });
+
     return new WebGPUPathTracer(
       device,
       context,
@@ -221,6 +261,8 @@ export class WebGPUPathTracer {
       bindGroupLayout,
       cameraBuffer,
       stateBuffer,
+      skyboxTexture,
+      skyboxSampler,
       width,
       height
     );
@@ -375,6 +417,8 @@ export class WebGPUPathTracer {
         { binding: 3, resource: { buffer: this.stateBuffer } },
         { binding: 4, resource: { buffer: this.sphereBuffer } },
         { binding: 5, resource: { buffer: this.bvhBuffer! } },
+        { binding: 6, resource: this.skyboxTexture.createView() },
+        { binding: 7, resource: this.skyboxSampler },
       ],
     });
 
@@ -439,6 +483,7 @@ export class WebGPUPathTracer {
     this.triangleBuffer?.destroy();
     this.sphereBuffer?.destroy();
     this.bvhBuffer?.destroy();
+    this.skyboxTexture.destroy();
     this.device.destroy();
   }
 }

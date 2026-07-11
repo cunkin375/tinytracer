@@ -98,6 +98,8 @@ struct HitRecord {
 @group(0) @binding(3) var<uniform> state: RenderState;
 @group(0) @binding(4) var<storage, read> spheres: array<Sphere>;
 @group(0) @binding(5) var<storage, read> bvh_nodes: array<BVHNode>;
+@group(0) @binding(6) var skybox_texture: texture_2d<f32>;
+@group(0) @binding(7) var skybox_sampler: sampler;
 
 // ── RNG: PCG Hash ───────────────────────────────────────────────────────────
 
@@ -441,10 +443,19 @@ fn scatter(r: Ray, rec: HitRecord) -> ScatterResult {
 // ── Sky Color ───────────────────────────────────────────────────────────────
 
 fn sky_color(r: Ray) -> vec3<f32> {
-    let unit_dir = normalize(r.direction);
-    let a = 0.5 * (unit_dir.y + 1.0);
-    // Gradient from white (horizon) to blue (zenith)
-    return (1.0 - a) * vec3<f32>(1.0, 1.0, 1.0) + a * vec3<f32>(0.5, 0.7, 1.0);
+    let d = normalize(r.direction);
+    
+    // Map direction to spherical coordinates (u, v)
+    // U: Azimuthal angle. Matches Three.js SphereGeometry u mapping.
+    let u = 0.5 + atan2(d.z, d.x) / (2.0 * PI);
+    // Repeat horizontally 3 times as configured in Three.js
+    let u_repeated = fract(u * 3.0);
+    
+    // V: Elevation angle. WebGPU textures have v=0 at the top, v=1 at the bottom.
+    // Three.js v=1 is at the top (zenith). So WebGPU v = 1.0 - threejs_v
+    let v = 0.5 - asin(d.y) / PI;
+    
+    return textureSampleLevel(skybox_texture, skybox_sampler, vec2<f32>(u_repeated, v), 0.0).rgb;
 }
 
 // ── Path Tracing ────────────────────────────────────────────────────────────

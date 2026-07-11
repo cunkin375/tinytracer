@@ -10,6 +10,7 @@ import {
   serializeSpheres,
   serializeTriangles,
 } from "@/lib/webgpu/serializer";
+import { preloadSkyboxTexture } from "../objects/Skybox";
 
 /** Cap the device-pixel-ratio so the compute pass stays affordable. */
 const MAX_PIXEL_RATIO = 1.5;
@@ -66,7 +67,11 @@ export function usePathTracer(
           canvas.width = width;
           canvas.height = height;
           setIsInitializing(true);
-          tracerRef.current = await WebGPUPathTracer.create(canvas);
+          const skyboxTexture = await preloadSkyboxTexture();
+          tracerRef.current = await WebGPUPathTracer.create(
+            canvas,
+            skyboxTexture.image as HTMLImageElement | ImageBitmap
+          );
           setIsInitializing(false);
         } else if (canvas.width !== width || canvas.height !== height) {
           canvas.width = width;
