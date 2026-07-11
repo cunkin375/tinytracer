@@ -23,6 +23,7 @@
     "@webgpu/types": "^0.1.71",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
+    "raw-loader": "^4.0.2",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

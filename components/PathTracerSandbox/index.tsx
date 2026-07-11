@@ -5,10 +5,11 @@ import type { CameraMode, OrthoView, SceneRefs, TransformMode } from "./types";
 import { useThreeScene } from "./hooks/useThreeScene";
 import { useCameraMode } from "./hooks/useCameraMode";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { usePathTracer } from "./hooks/usePathTracer";
 import { TopBar } from "./components/TopBar";
 import { LeftPanel } from "./components/LeftPanel";
 import { BottomStatusBar } from "./components/BottomStatusBar";
-import { TracingOverlay } from "./components/TracingOverlay";
+import { PathTracerOutput } from "./components/PathTracerOutput";
 import "./PathTracerSandbox.css";
 
 export default function PathTracerSandbox() {
@@ -18,18 +19,47 @@ export default function PathTracerSandbox() {
 
   const [cameraMode, setCameraMode] = useState<CameraMode>("perspective");
   const [orthoView, setOrthoView] = useState<OrthoView>("front");
-  const [isTracing, setIsTracing] = useState(false);
   const [selectedName, setSelectedName] = useState<string | null>(null);
 
   useThreeScene(containerRef, sceneRef, cameraModeRef, setSelectedName);
   useCameraMode(sceneRef, cameraModeRef, cameraMode, orthoView);
 
-  const handleRunTracer = useCallback(() => {
-    setIsTracing(true);
-    setTimeout(() => {
-      setIsTracing(false);
-    }, 3000);
-  }, []);
+  const {
+    outputCanvasRef,
+    isTracing,
+    isInitializing,
+    error,
+    runTracer,
+    stopTracer,
+  } = usePathTracer(containerRef);
+
+  const handleRunTracer = useCallback(async () => {
+    const refs = sceneRef.current;
+    if (!refs) return;
+
+    // The path tracer only ever renders the perspective camera. If the user is
+    // in orthographic mode, flip the sandbox to perspective so the view behind
+    // the overlay matches the traced result.
+    if (cameraMode === "orthographic") setCameraMode("perspective");
+
+    // Freeze all scene interaction while the result is displayed.
+    refs.orbitControls.enabled = false;
+    refs.transformControls.enabled = false;
+    refs.transformControls.detach();
+    if (refs.selectedObject) refs.selectedObject = null;
+    setSelectedName(null);
+
+    await runTracer(refs.scene, refs.perspCamera);
+  }, [cameraMode, runTracer]);
+
+  const handleStopTracer = useCallback(() => {
+    stopTracer();
+    const refs = sceneRef.current;
+    if (refs) {
+      refs.orbitControls.enabled = true;
+      refs.transformControls.enabled = true;
+    }
+  }, [stopTracer]);
 
   const handleToggleCamera = useCallback(() => {
     if (cameraMode === "perspective") {
@@ -71,7 +101,13 @@ export default function PathTracerSandbox() {
         selectedName={selectedName}
       />
 
-      {isTracing && <TracingOverlay />}
+      <PathTracerOutput
+        canvasRef={outputCanvasRef}
+        isTracing={isTracing}
+        isInitializing={isInitializing}
+        error={error}
+        onStop={handleStopTracer}
+      />
     </div>
   );
 }
