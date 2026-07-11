@@ -3,9 +3,12 @@ import type { RefObject } from "react";
 import * as THREE from "three";
 import { WebGPUPathTracer } from "@/lib/webgpu/renderer";
 import {
-  countSpheres,
+  FLOATS_PER_SPHERE,
+  FLOATS_PER_TRIANGLE,
+  FLOATS_PER_BVH_NODE,
   serializeCamera,
   serializeSpheres,
+  serializeTriangles,
 } from "@/lib/webgpu/serializer";
 
 /** Cap the device-pixel-ratio so the compute pass stays affordable. */
@@ -74,12 +77,15 @@ export function usePathTracer(
         const tracer = tracerRef.current;
 
         // ── Serialize → upload → dispatch ─────────────────────────────────
+        const { triangleData, bvhData } = serializeTriangles(scene);
+        const triangleCount = triangleData.length / FLOATS_PER_TRIANGLE;
+        const bvhNodeCount = bvhData.length / FLOATS_PER_BVH_NODE;
         const sphereData = serializeSpheres(scene);
-        const sphereCount = countSpheres(scene);
-        tracer.updateScene(sphereData, sphereCount);
+        const sphereCount = sphereData.length / FLOATS_PER_SPHERE;
+        tracer.updateScene(triangleData, triangleCount, sphereData, sphereCount, bvhData, bvhNodeCount);
 
         const cameraData = serializeCamera(camera);
-        tracer.dispatchCompute(cameraData, 1, sphereCount);
+        tracer.dispatchCompute(cameraData, 1, triangleCount, sphereCount);
 
         setIsTracing(true);
       } catch (err) {
