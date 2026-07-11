@@ -13,10 +13,8 @@ import { useCameraMode } from "./hooks/useCameraMode";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { usePathTracer } from "./hooks/usePathTracer";
 import { TopBar } from "./components/TopBar";
-import { LeftPanel } from "./components/LeftPanel";
 import { SunPanel } from "./components/SunPanel";
 import { EnergyStatsPanel } from "./components/EnergyStatsPanel";
-import { BottomStatusBar } from "./components/BottomStatusBar";
 import { PathTracerOutput } from "./components/PathTracerOutput";
 import { ScenePanel } from "./components/ScenePanel";
 import { DEFAULT_TREE_COUNT } from "./constants";
@@ -29,8 +27,12 @@ export default function PathTracerSandbox() {
   const cameraModeRef = useRef<CameraMode>("perspective");
 
   const [cameraMode, setCameraMode] = useState<CameraMode>("perspective");
-  const [orthoView, setOrthoView] = useState<OrthoView>("front");
-  const [selectedName, setSelectedName] = useState<string | null>(null);
+  // Ortho toggling had no UI trigger once LeftPanel was removed — the
+  // camera stays perspective, but useCameraMode still wants an OrthoView.
+  const orthoView: OrthoView = "front";
+  // Nothing displays the selected object's name anymore (BottomStatusBar was
+  // removed), but the setter still drives selection bookkeeping elsewhere.
+  const [, setSelectedName] = useState<string | null>(null);
   const [treeCount, setTreeCount] = useState(DEFAULT_TREE_COUNT);
   const [sun, setSun] = useState<SunSettings>(DEFAULT_SUN);
   const [sunPanelOpen, setSunPanelOpen] = useState(false);
@@ -91,19 +93,6 @@ export default function PathTracerSandbox() {
     }
   }, [stopTracer]);
 
-  const handleToggleCamera = useCallback(() => {
-    if (cameraMode === "perspective") {
-      setCameraMode("orthographic");
-      setOrthoView("front");
-    } else {
-      setCameraMode("perspective");
-    }
-  }, [cameraMode]);
-
-  const handleOrthoViewToggle = useCallback(() => {
-    setOrthoView((v) => (v === "front" ? "top" : "front"));
-  }, []);
-
   const setTransformMode = useCallback((mode: TransformMode) => {
     sceneRef.current?.transformControls.setMode(mode);
   }, []);
@@ -111,10 +100,6 @@ export default function PathTracerSandbox() {
   const handleTreeCountChange = useCallback((count: number) => {
     setTreeCount(count);
     sceneRef.current?.setTreeCount(count);
-  }, []);
-
-  const handleAddCar = useCallback(() => {
-    sceneRef.current?.addCar();
   }, []);
 
   useKeyboardShortcuts(isTracing, sceneRef, setTransformMode, setSelectedName);
@@ -125,14 +110,6 @@ export default function PathTracerSandbox() {
       <div ref={containerRef} className="absolute inset-0" />
 
       <TopBar isTracing={isTracing} onRunTracer={handleRunTracer} />
-
-      <LeftPanel
-        cameraMode={cameraMode}
-        orthoView={orthoView}
-        onToggleCamera={handleToggleCamera}
-        onToggleOrthoView={handleOrthoViewToggle}
-        onSetTransformMode={setTransformMode}
-      />
 
       {!isTracing && (
         <SunPanel
@@ -145,16 +122,9 @@ export default function PathTracerSandbox() {
 
       {isTracing && !isInitializing && !error && <EnergyStatsPanel />}
 
-      <BottomStatusBar
-        cameraMode={cameraMode}
-        orthoView={orthoView}
-        selectedName={selectedName}
-      />
-
       <ScenePanel
         treeCount={treeCount}
         onTreeCountChange={handleTreeCountChange}
-        onAddCar={handleAddCar}
       />
 
       <PathTracerOutput

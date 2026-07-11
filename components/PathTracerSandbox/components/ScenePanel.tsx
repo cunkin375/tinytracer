@@ -4,18 +4,15 @@ import { MAX_TREE_COUNT } from "../constants";
  * The main app is a locked-down viewer (see useThreeScene.ts): terrain,
  * trees, and the solar panel aren't selectable/movable there, and there's no
  * way to add/sculpt shapes directly. This panel is the one piece of real
- * scene control the main app still exposes — tree density, adding the one
- * draggable object (Car), and a way back to the shape editor for anything
- * bigger.
+ * scene control the main app still exposes — tree density and a way back to
+ * the shape editor for anything bigger.
  */
 export function ScenePanel({
   treeCount,
   onTreeCountChange,
-  onAddCar,
 }: {
   treeCount: number;
   onTreeCountChange: (count: number) => void;
-  onAddCar: () => void;
 }) {
   return (
     <div className="absolute right-4 top-20 z-10 pointer-events-auto">
@@ -50,34 +47,6 @@ export function ScenePanel({
             onChange={(e) => onTreeCountChange(Number(e.target.value))}
             className="w-full accent-[#74c311]"
           />
-        </div>
-
-        <div>
-          <label
-            htmlFor="add-object-select"
-            className="text-[11px] text-white/50 block mb-1.5"
-          >
-            Add object
-          </label>
-          <select
-            id="add-object-select"
-            value=""
-            onChange={(e) => {
-              if (e.target.value === "Car") onAddCar();
-              e.currentTarget.value = "";
-            }}
-            className="w-full text-[12px] rounded-lg px-2 py-1.5 cursor-pointer"
-            style={{
-              background: "rgba(255,255,255,0.06)",
-              border: "1px solid rgba(255,255,255,0.08)",
-              color: "white",
-            }}
-          >
-            <option value="" disabled>
-              Add…
-            </option>
-            <option value="Car">Car</option>
-          </select>
         </div>
 
         <a
