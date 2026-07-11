@@ -170,6 +170,7 @@ export function useThreeScene(
             child.material = material;
             child.castShadow = true;
             child.receiveShadow = true;
+            child.userData.isTraceable = true;
             selectables.push(child);
           }
         });
@@ -192,6 +193,7 @@ export function useThreeScene(
           child.material = material;
           child.castShadow = true;
           child.receiveShadow = true;
+          child.userData.isTraceable = true;
           selectables.push(child);
         }
       });

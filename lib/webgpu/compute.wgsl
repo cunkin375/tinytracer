@@ -4,7 +4,8 @@
 // Implements "Ray Tracing in a Weekend" on the GPU:
 //   • PCG-hash RNG for per-pixel statistical independence
 //   • Thin-lens camera with jittered sub-pixel sampling
-//   • Analytic ray–sphere intersection
+//   • Analytic ray–sphere intersection (smooth spheres)
+//   • Möller–Trumbore ray–triangle intersection (world-space triangle soup)
 //   • Lambertian, Metal, and Dielectric materials
 //   • Iterative path tracing with progressive accumulation
 // ============================================================================
@@ -43,8 +44,30 @@ struct Sphere {
     mat_data:        vec4<f32>,
 }
 
+struct BVHNode {
+    aabb_min: vec3<f32>,
+    left_first: u32,
+    aabb_max: vec3<f32>,
+    tri_count: u32,
+}
+
+struct Triangle {
+    // World-space vertices (w components are padding).
+    v0:              vec3<f32>,
+    _p0:             f32,
+    v1:              vec3<f32>,
+    _p1:             f32,
+    v2:              vec3<f32>,
+    _p2:             f32,
+    // xyz = albedo,  w = roughness
+    albedo_roughness: vec4<f32>,
+    // x = material type, y = IOR, z/w = padding
+    mat_data:        vec4<f32>,
+}
+
 struct RenderState {
     frame_count:  u32,
+    tri_count:    u32,
     sphere_count: u32,
     width:        u32,
     height:       u32,
@@ -60,7 +83,7 @@ struct HitRecord {
     normal:     vec3<f32>,
     t:          f32,
     front_face: bool,
-    // Material data copied from the hit sphere
+    // Material data copied from the hit triangle
     albedo:     vec3<f32>,
     roughness:  f32,
     mat_type:   u32,
@@ -71,8 +94,10 @@ struct HitRecord {
 
 @group(0) @binding(0) var output_texture: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(1) var<uniform> camera: Camera;
-@group(0) @binding(2) var<storage, read> spheres: array<Sphere>;
+@group(0) @binding(2) var<storage, read> triangles: array<Triangle>;
 @group(0) @binding(3) var<uniform> state: RenderState;
+@group(0) @binding(4) var<storage, read> spheres: array<Sphere>;
+@group(0) @binding(5) var<storage, read> bvh_nodes: array<BVHNode>;
 
 // ── RNG: PCG Hash ───────────────────────────────────────────────────────────
 
@@ -156,7 +181,7 @@ fn get_ray(u: f32, v: f32) -> Ray {
     return Ray(camera.camera_pos, direction);
 }
 
-// ── Sphere Intersection ─────────────────────────────────────────────────────
+// ── Intersection ────────────────────────────────────────────────────────────
 
 fn set_face_normal(r: Ray, outward_normal: vec3<f32>, rec: ptr<function, HitRecord>) {
     (*rec).front_face = dot(r.direction, outward_normal) < 0.0;
@@ -167,6 +192,22 @@ fn set_face_normal(r: Ray, outward_normal: vec3<f32>, rec: ptr<function, HitReco
     }
 }
 
+
+fn hit_aabb(r: Ray, t_min: f32, t_max: f32, aabb_min: vec3<f32>, aabb_max: vec3<f32>) -> bool {
+    var invD = vec3<f32>(1.0) / r.direction;
+    var t0s = (aabb_min - r.origin) * invD;
+    var t1s = (aabb_max - r.origin) * invD;
+    
+    var tsmaller = min(t0s, t1s);
+    var tbigger  = max(t0s, t1s);
+    
+    var tmin_calc = max(t_min, max(tsmaller.x, max(tsmaller.y, tsmaller.z)));
+    var tmax_calc = min(t_max, min(tbigger.x, min(tbigger.y, tbigger.z)));
+    
+    return tmin_calc <= tmax_calc;
+}
+
+// Analytic ray/sphere intersection with a smooth (per-point) normal.
 fn hit_sphere(r: Ray, sphere: Sphere, t_min: f32, t_max: f32, rec: ptr<function, HitRecord>) -> bool {
     let center = sphere.center_radius.xyz;
     let radius = sphere.center_radius.w;
@@ -197,7 +238,7 @@ fn hit_sphere(r: Ray, sphere: Sphere, t_min: f32, t_max: f32, rec: ptr<function,
     let outward_normal = ((*rec).p - center) / radius;
     set_face_normal(r, outward_normal, rec);
 
-    // Copy material data from sphere
+    // Copy material data from the sphere
     (*rec).albedo    = sphere.albedo_roughness.xyz;
     (*rec).roughness = sphere.albedo_roughness.w;
     (*rec).mat_type  = u32(sphere.mat_data.x);
@@ -206,17 +247,99 @@ fn hit_sphere(r: Ray, sphere: Sphere, t_min: f32, t_max: f32, rec: ptr<function,
     return true;
 }
 
-/// Test all spheres, return the closest hit.
+// Möller–Trumbore ray/triangle intersection with a flat (per-face) normal.
+fn hit_triangle(r: Ray, tri: Triangle, t_min: f32, t_max: f32, rec: ptr<function, HitRecord>) -> bool {
+    let e1 = tri.v1 - tri.v0;
+    let e2 = tri.v2 - tri.v0;
+
+    let pvec = cross(r.direction, e2);
+    let det  = dot(e1, pvec);
+
+    // Parallel ray (also skips degenerate triangles). Double-sided: no cull.
+    // Uses a tiny determinant threshold so grazing hits aren't wrongly culled.
+    if abs(det) < 1e-8 {
+        return false;
+    }
+    let inv_det = 1.0 / det;
+
+    let tvec = r.origin - tri.v0;
+    let u = dot(tvec, pvec) * inv_det;
+    if u < 0.0 || u > 1.0 {
+        return false;
+    }
+
+    let qvec = cross(tvec, e1);
+    let v = dot(r.direction, qvec) * inv_det;
+    if v < 0.0 || u + v > 1.0 {
+        return false;
+    }
+
+    let t = dot(e2, qvec) * inv_det;
+    if t <= t_min || t_max <= t {
+        return false;
+    }
+
+    (*rec).t = t;
+    (*rec).p = ray_at(r, t);
+    let outward_normal = normalize(cross(e1, e2));
+    set_face_normal(r, outward_normal, rec);
+
+    // Copy material data from the triangle
+    (*rec).albedo    = tri.albedo_roughness.xyz;
+    (*rec).roughness = tri.albedo_roughness.w;
+    (*rec).mat_type  = u32(tri.mat_data.x);
+    (*rec).ior       = tri.mat_data.y;
+
+    return true;
+}
+
+/// Test every primitive (spheres + triangles), return the closest hit.
 fn hit_world(r: Ray, t_min: f32, t_max: f32, rec: ptr<function, HitRecord>) -> bool {
     var hit_anything = false;
     var closest = t_max;
 
+    // Analytic spheres
     for (var i = 0u; i < state.sphere_count; i++) {
         var temp_rec: HitRecord;
         if hit_sphere(r, spheres[i], t_min, closest, &temp_rec) {
             hit_anything = true;
             closest = temp_rec.t;
             *rec = temp_rec;
+        }
+    }
+
+    // BVH Traversal for Triangles
+    if (state.tri_count > 0u) {
+        var stack: array<u32, 64>;
+        var stack_ptr: u32 = 0u;
+        stack[stack_ptr] = 0u; // Push root
+        stack_ptr += 1u;
+        
+        while (stack_ptr > 0u) {
+            stack_ptr -= 1u;
+            let node_idx = stack[stack_ptr];
+            let node = bvh_nodes[node_idx];
+            
+            if hit_aabb(r, t_min, closest, node.aabb_min, node.aabb_max) {
+                if (node.tri_count > 0u) {
+                    // Leaf node
+                    for (var i = 0u; i < node.tri_count; i++) {
+                        var temp_rec: HitRecord;
+                        if hit_triangle(r, triangles[node.left_first + i], t_min, closest, &temp_rec) {
+                            hit_anything = true;
+                            closest = temp_rec.t;
+                            *rec = temp_rec;
+                        }
+                    }
+                } else {
+                    // Interior node - push children
+                    // Order doesn't strictly matter for correctness, but pushing both works
+                    stack[stack_ptr] = node.left_first;
+                    stack_ptr += 1u;
+                    stack[stack_ptr] = node.left_first + 1u;
+                    stack_ptr += 1u;
+                }
+            }
         }
     }
 
@@ -354,6 +477,11 @@ fn trace(initial_ray: Ray) -> vec3<f32> {
 
 // ── Compute Entry Point ─────────────────────────────────────────────────────
 
+/// Anti-aliasing sample budget: rays cast per pixel, each jittered within the
+/// pixel and averaged. Higher = smoother edges & less noise, but linearly
+/// slower. Tunable — bump for quality, lower if a dispatch stalls.
+const SAMPLES_PER_PIXEL: u32 = 8u;
+
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pixel = global_id.xy;
@@ -365,32 +493,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     init_rng(pixel, state.frame_count);
 
-    // Jittered sub-pixel sample
-    let u = (f32(pixel.x) + rand()) / f32(state.width);
-    let v = (f32(pixel.y) + rand()) / f32(state.height);
-
-    let ray = get_ray(u, v);
-    let sample_color = trace(ray);
-
-    // ── Progressive Accumulation ────────────────────────────────────────
-    // On the first frame, just write the sample.
-    // On subsequent frames, blend with the existing pixel value.
-    let frame = f32(state.frame_count);
-
-    if state.frame_count <= 1u {
-        // First frame: direct write
-        textureStore(output_texture, pixel, vec4<f32>(sample_color, 1.0));
-    } else {
-        // Read back the previous accumulated value from the texture.
-        // Since we're using texture_storage_2d<write>, we can't read back.
-        // Instead, we use the frame count to compute a running average:
-        //   new_avg = old_avg + (sample - old_avg) / frame_count
-        // But since we can't read the texture, we re-derive the average
-        // by treating each dispatch as 1 sample per pixel. The caller
-        // should use a separate accumulation buffer for multi-sample.
-        //
-        // For now, each dispatch writes a single fresh sample. The host
-        // renderer is responsible for ping-pong accumulation if desired.
-        textureStore(output_texture, pixel, vec4<f32>(sample_color, 1.0));
+    // ── Multi-sample anti-aliasing ──────────────────────────────────────
+    // Average many jittered sub-pixel samples. The per-sample jitter comes
+    // from the RNG, so each of the SAMPLES_PER_PIXEL rays lands at a slightly
+    // different point inside the pixel, smoothing geometry edges.
+    var accum = vec3<f32>(0.0);
+    for (var s = 0u; s < SAMPLES_PER_PIXEL; s++) {
+        let u = (f32(pixel.x) + rand()) / f32(state.width);
+        let v = 1.0 - (f32(pixel.y) + rand()) / f32(state.height);
+        accum += trace(get_ray(u, v));
     }
+
+    var color = accum / f32(SAMPLES_PER_PIXEL);
+
+    // Gamma correction (linear → sRGB, γ≈2.0) for perceptually correct output.
+    color = sqrt(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)));
+
+    textureStore(output_texture, pixel, vec4<f32>(color, 1.0));
 }

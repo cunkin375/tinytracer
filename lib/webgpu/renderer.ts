@@ -6,8 +6,8 @@
 //
 // Usage:
 //   const tracer = await WebGPUPathTracer.create(canvas);
-//   tracer.updateScene(sphereData, sphereCount);
-//   tracer.dispatchCompute(cameraData, frameCount);
+//   tracer.updateScene(triangleData, triangleCount, sphereData, sphereCount);
+//   tracer.dispatchCompute(cameraData, frameCount, triangleCount, sphereCount);
 //   // ... in a loop or on demand
 //   tracer.destroy();
 // ============================================================================
@@ -19,11 +19,20 @@ import shaderCode from "./compute.wgsl";
 /** Camera uniform: 16 floats × 4 bytes = 64 bytes. */
 const CAMERA_BUFFER_SIZE = 64;
 
-/** RenderState uniform: 4 × u32 = 16 bytes. */
-const STATE_BUFFER_SIZE = 16;
+/**
+ * RenderState uniform: 5 × u32 of data, but the WGSL struct rounds up to a
+ * 16-byte alignment boundary → 32 bytes allocated.
+ */
+const STATE_BUFFER_SIZE = 32;
+
+/** Each Triangle is 20 floats × 4 bytes = 80 bytes. */
+const TRIANGLE_BYTE_STRIDE = 80;
 
 /** Each Sphere is 12 floats × 4 bytes = 48 bytes. */
 const SPHERE_BYTE_STRIDE = 48;
+
+/** Each BVH Node is 8 floats × 4 bytes = 32 bytes. */
+const BVH_BYTE_STRIDE = 32;
 
 /** Workgroup dimensions — must match @workgroup_size in the shader. */
 const WORKGROUP_X = 16;
@@ -44,10 +53,14 @@ export class WebGPUPathTracer {
   // Buffers
   private cameraBuffer: GPUBuffer;
   private stateBuffer: GPUBuffer;
+  private triangleBuffer: GPUBuffer | null = null;
   private sphereBuffer: GPUBuffer | null = null;
+  private bvhBuffer: GPUBuffer | null = null;
 
   // Tracking
+  private currentTriangleCapacity = 0;
   private currentSphereCapacity = 0;
+  private currentBvhCapacity = 0;
   private width: number;
   private height: number;
   private bindGroup: GPUBindGroup | null = null;
@@ -147,7 +160,7 @@ export class WebGPUPathTracer {
           buffer: { type: "uniform" },
         },
         {
-          // @binding(2): Sphere storage (read-only)
+          // @binding(2): Triangle storage (read-only)
           binding: 2,
           visibility: GPUShaderStage.COMPUTE,
           buffer: { type: "read-only-storage" },
@@ -157,6 +170,18 @@ export class WebGPUPathTracer {
           binding: 3,
           visibility: GPUShaderStage.COMPUTE,
           buffer: { type: "uniform" },
+        },
+        {
+          // @binding(4): Sphere storage (read-only)
+          binding: 4,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "read-only-storage" },
+        },
+        {
+          // @binding(5): BVH storage (read-only)
+          binding: 5,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "read-only-storage" },
         },
       ],
     });
@@ -204,34 +229,92 @@ export class WebGPUPathTracer {
   // ── Scene Updates ───────────────────────────────────────────────────────
 
   /**
-   * Upload sphere data to the GPU. Re-creates the storage buffer if the
-   * number of spheres has changed.
+   * Upload the scene's primitives to the GPU. Both storage buffers are
+   * re-created if the corresponding primitive count has grown beyond the
+   * current capacity.
    *
-   * @param sphereData  Packed Float32Array from `serializeSpheres`.
-   * @param sphereCount Number of spheres in the array.
+   * @param triangleData  Packed Float32Array from `serializeTriangles`.
+   * @param triangleCount Number of triangles in the array.
+   * @param sphereData    Packed Float32Array from `serializeSpheres`.
+   * @param sphereCount   Number of spheres in the array.
    */
-  updateScene(sphereData: Float32Array, sphereCount: number): void {
-    const requiredBytes = Math.max(sphereCount * SPHERE_BYTE_STRIDE, SPHERE_BYTE_STRIDE);
+  updateScene(
+    triangleData: Float32Array,
+    triangleCount: number,
+    sphereData: Float32Array,
+    sphereCount: number,
+    bvhData: Float32Array,
+    bvhNodeCount: number
+  ): void {
+    this.triangleBuffer = this.uploadStorage(
+      this.triangleBuffer,
+      triangleData,
+      triangleCount,
+      this.currentTriangleCapacity,
+      TRIANGLE_BYTE_STRIDE,
+      "Triangle Storage Buffer",
+      (cap) => (this.currentTriangleCapacity = cap)
+    );
 
-    // Re-create the buffer if capacity is insufficient
-    if (!this.sphereBuffer || sphereCount > this.currentSphereCapacity) {
-      this.sphereBuffer?.destroy();
-      this.sphereBuffer = this.device.createBuffer({
-        label: "Sphere Storage Buffer",
+    this.sphereBuffer = this.uploadStorage(
+      this.sphereBuffer,
+      sphereData,
+      sphereCount,
+      this.currentSphereCapacity,
+      SPHERE_BYTE_STRIDE,
+      "Sphere Storage Buffer",
+      (cap) => (this.currentSphereCapacity = cap)
+    );
+
+    this.bvhBuffer = this.uploadStorage(
+      this.bvhBuffer,
+      bvhData,
+      bvhNodeCount,
+      this.currentBvhCapacity,
+      BVH_BYTE_STRIDE,
+      "BVH Storage Buffer",
+      (cap) => (this.currentBvhCapacity = cap)
+    );
+  }
+
+  /**
+   * Ensure a read-only storage buffer is large enough for `count` primitives
+   * and upload `data` into it. Grows (never shrinks) the buffer, invalidating
+   * the bind group whenever a new buffer is allocated.
+   */
+  private uploadStorage(
+    buffer: GPUBuffer | null,
+    data: Float32Array,
+    count: number,
+    capacity: number,
+    byteStride: number,
+    label: string,
+    setCapacity: (cap: number) => void
+  ): GPUBuffer {
+    // Always keep at least one stride so the buffer is a valid binding even
+    // when the scene has no primitives of this kind.
+    const requiredBytes = Math.max(data.byteLength, byteStride);
+
+    if (!buffer || count > capacity) {
+      buffer?.destroy();
+      buffer = this.device.createBuffer({
+        label,
         size: requiredBytes,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       });
-      this.currentSphereCapacity = sphereCount;
-      // Invalidate bind group — it references the old buffer
+      setCapacity(count);
+      // Invalidate bind group — it references the old buffer.
       this.bindGroup = null;
     }
 
-    if (sphereData.byteLength > 0) {
+    if (data.byteLength > 0) {
       this.device.queue.writeBuffer(
-        this.sphereBuffer, 0,
-        sphereData.buffer, sphereData.byteOffset, sphereData.byteLength
+        buffer, 0,
+        data.buffer, data.byteOffset, data.byteLength
       );
     }
+
+    return buffer;
   }
 
   // ── Compute Dispatch ────────────────────────────────────────────────────
@@ -247,6 +330,7 @@ export class WebGPUPathTracer {
   dispatchCompute(
     cameraData: Float32Array,
     frameCount: number,
+    triangleCount: number,
     sphereCount: number
   ): void {
     // ── Update camera uniform ─────────────────────────────────────────
@@ -256,8 +340,10 @@ export class WebGPUPathTracer {
     );
 
     // ── Update render state uniform ───────────────────────────────────
+    // Order must match the WGSL RenderState struct.
     const stateData = new Uint32Array([
       frameCount,
+      triangleCount,
       sphereCount,
       this.width,
       this.height,
@@ -274,7 +360,7 @@ export class WebGPUPathTracer {
     // ── Build / rebuild bind group ────────────────────────────────────
     // We must recreate the bind group every frame because the canvas
     // texture view changes each frame.
-    if (!this.sphereBuffer) {
+    if (!this.triangleBuffer || !this.sphereBuffer) {
       // No scene uploaded yet — nothing to render.
       return;
     }
@@ -285,8 +371,10 @@ export class WebGPUPathTracer {
       entries: [
         { binding: 0, resource: textureView },
         { binding: 1, resource: { buffer: this.cameraBuffer } },
-        { binding: 2, resource: { buffer: this.sphereBuffer } },
+        { binding: 2, resource: { buffer: this.triangleBuffer } },
         { binding: 3, resource: { buffer: this.stateBuffer } },
+        { binding: 4, resource: { buffer: this.sphereBuffer } },
+        { binding: 5, resource: { buffer: this.bvhBuffer! } },
       ],
     });
 
@@ -348,7 +436,9 @@ export class WebGPUPathTracer {
   destroy(): void {
     this.cameraBuffer.destroy();
     this.stateBuffer.destroy();
+    this.triangleBuffer?.destroy();
     this.sphereBuffer?.destroy();
+    this.bvhBuffer?.destroy();
     this.device.destroy();
   }
 }
