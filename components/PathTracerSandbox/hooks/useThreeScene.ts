@@ -4,6 +4,8 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { ORTHO_FRUSTUM_SIZE } from "../constants";
+import { createSceneCubes } from "../objects/sceneCubes";
+import { createScenePyramids } from "../objects/scenePyramids";
 import { createSceneSpheres } from "../objects/sceneSpheres";
 import type { CameraMode, SceneRefs } from "../types";
 
@@ -110,6 +112,20 @@ export function useThreeScene(
     createSceneSpheres().forEach((sphere) => {
       scene.add(sphere);
       selectables.push(sphere);
+    });
+
+    // ── Cubes ──────────────────────────────────────────────────────────────
+
+    createSceneCubes().forEach((cube) => {
+      scene.add(cube);
+      selectables.push(cube);
+    });
+
+    // ── Pyramids ───────────────────────────────────────────────────────────
+
+    createScenePyramids().forEach((pyramid) => {
+      scene.add(pyramid);
+      selectables.push(pyramid);
     });
 
     // ── Controls ───────────────────────────────────────────────────────────
