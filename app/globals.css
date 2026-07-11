@@ -10,6 +10,19 @@
   --border: rgba(255, 255, 255, 0.08);
   --danger: #ef4444;
   --success: #22c55e;
+
+  /* ── Pastel Brand Palette ─────────────────────────────────── */
+  /* Primary Brand Color */
+  --vibrant-meadow-green: #74c311;  /* RGB(116, 195,  17) */
+
+  /* Accent & UI Colors */
+  --forest-deep:          #235338;  /* RGB( 35,  83,  56) */
+  --hazy-mountain-blue:   #8cb4d9;  /* RGB(140, 180, 217) */
+  --goldenrod-meadow:     #dcb965;  /* RGB(220, 185, 101) */
+  --soft-pink-blossom:    #e0a3ac;  /* RGB(224, 163, 172) */
+
+  /* Backgrounds & Surfaces */
+  --parchment-white:      #f6f2e7;  /* RGB(246, 242, 231) */
 }
 
 @theme inline {
@@ -22,6 +35,14 @@
   --color-border: var(--border);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* ── Pastel Brand Palette → Tailwind utilities ────────────── */
+  --color-meadow-green:     var(--vibrant-meadow-green);
+  --color-forest-deep:      var(--forest-deep);
+  --color-mountain-blue:    var(--hazy-mountain-blue);
+  --color-goldenrod:        var(--goldenrod-meadow);
+  --color-pink-blossom:     var(--soft-pink-blossom);
+  --color-parchment:        var(--parchment-white);
 }
 
 * {
