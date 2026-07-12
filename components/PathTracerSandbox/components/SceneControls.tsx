@@ -2,62 +2,33 @@ import { MAX_TREE_COUNT } from "../constants";
 import type { SunSettings } from "../types";
 
 /**
- * Floating control panel for the scene. Adjusts the sun (direction, colour,
- * intensity) that both the WebGL preview and the path tracer read, plus tree
- * density — the other piece of scene control the main app exposes (see
- * useThreeScene.ts). Collapsed to a single button until opened.
+ * Left sidebar — the scene controls the main app exposes: the sun (direction,
+ * colour, intensity) that both the WebGL preview and the path tracer read,
+ * plus tree density (see useThreeScene.ts).
  */
-export function SunPanel({
+export function SceneControls({
   sun,
-  open,
-  onToggle,
   onChange,
   treeCount,
   onTreeCountChange,
+  disabled = false,
 }: {
   sun: SunSettings;
-  open: boolean;
-  onToggle: () => void;
   onChange: (next: SunSettings) => void;
   treeCount: number;
   onTreeCountChange: (count: number) => void;
+  /** Locks every control — the scene is frozen while a trace is showing. */
+  disabled?: boolean;
 }) {
-  const panelStyle = {
-    background: "rgba(18, 18, 26, 0.85)",
-    backdropFilter: "blur(16px)",
-    border: "1px solid rgba(35, 83, 56, 0.45)",
-    boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
-  } as const;
-
   return (
-    <div className="absolute right-4 top-20 z-10 pointer-events-auto">
-      {!open ? (
-        <button
-          onClick={onToggle}
-          title="Sun settings"
-          className="flex items-center justify-center w-10 h-10 rounded-xl text-white/80 hover:text-white transition-colors"
-          style={panelStyle}
-        >
-          <SunIcon />
-        </button>
-      ) : (
-        <div className="w-60 rounded-2xl p-4 flex flex-col gap-3" style={panelStyle}>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-white/90">
-              <SunIcon />
-              <span className="text-xs font-semibold tracking-wide uppercase">
-                Scene Settings
-              </span>
-            </div>
-            <button
-              onClick={onToggle}
-              title="Close"
-              className="text-white/50 hover:text-white text-sm leading-none"
-            >
-              ✕
-            </button>
-          </div>
-
+    <div
+      className={`flex flex-col gap-6 transition-opacity ${disabled ? "opacity-40 pointer-events-none" : ""}`}
+    >
+      <div>
+        <h2 className="text-[10px] font-semibold tracking-wide uppercase text-white/40 mb-3">
+          Sun
+        </h2>
+        <div className="flex flex-col gap-3">
           <Slider
             label="Azimuth"
             value={sun.azimuth}
@@ -65,6 +36,7 @@ export function SunPanel({
             max={360}
             step={1}
             unit="°"
+            disabled={disabled}
             onChange={(azimuth) => onChange({ ...sun, azimuth })}
           />
           <Slider
@@ -74,6 +46,7 @@ export function SunPanel({
             max={90}
             step={1}
             unit="°"
+            disabled={disabled}
             onChange={(elevation) => onChange({ ...sun, elevation })}
           />
           <Slider
@@ -82,6 +55,7 @@ export function SunPanel({
             min={0}
             max={5}
             step={0.05}
+            disabled={disabled}
             onChange={(intensity) => onChange({ ...sun, intensity })}
           />
 
@@ -90,23 +64,28 @@ export function SunPanel({
             <input
               type="color"
               value={sun.color}
+              disabled={disabled}
               onChange={(e) => onChange({ ...sun, color: e.target.value })}
               className="w-8 h-6 rounded cursor-pointer bg-transparent border border-white/15"
             />
           </label>
-
-          <div className="border-t border-white/10 pt-3">
-            <Slider
-              label="Trees"
-              value={treeCount}
-              min={0}
-              max={MAX_TREE_COUNT}
-              step={1}
-              onChange={onTreeCountChange}
-            />
-          </div>
         </div>
-      )}
+      </div>
+
+      <div className="border-t border-white/10 pt-4">
+        <h2 className="text-[10px] font-semibold tracking-wide uppercase text-white/40 mb-3">
+          Trees
+        </h2>
+        <Slider
+          label="Count"
+          value={treeCount}
+          min={0}
+          max={MAX_TREE_COUNT}
+          step={1}
+          disabled={disabled}
+          onChange={onTreeCountChange}
+        />
+      </div>
     </div>
   );
 }
@@ -118,6 +97,7 @@ function Slider({
   max,
   step,
   unit = "",
+  disabled = false,
   onChange,
 }: {
   label: string;
@@ -126,6 +106,7 @@ function Slider({
   max: number;
   step: number;
   unit?: string;
+  disabled?: boolean;
   onChange: (value: number) => void;
 }) {
   return (
@@ -143,26 +124,10 @@ function Slider({
         max={max}
         step={step}
         value={value}
+        disabled={disabled}
         onChange={(e) => onChange(parseFloat(e.target.value))}
         className="w-full accent-[#74c311]"
       />
     </label>
-  );
-}
-
-function SunIcon() {
-  return (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-    >
-      <circle cx="12" cy="12" r="4" />
-      <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-    </svg>
   );
 }

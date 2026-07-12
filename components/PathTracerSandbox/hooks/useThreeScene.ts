@@ -67,7 +67,7 @@ export function useThreeScene(
       // gets clipped as the camera orbits.
 
       const perspCamera = new THREE.PerspectiveCamera(50, aspect, 0.1, 200);
-      perspCamera.position.set(22, 16, 28);
+      perspCamera.position.set(29, 21, 36);
       perspCamera.lookAt(0, 0, 0);
 
       const orthoHalfH = ORTHO_FRUSTUM_SIZE / 2;

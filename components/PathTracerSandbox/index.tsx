@@ -13,8 +13,8 @@ import { useCameraMode } from "./hooks/useCameraMode";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { usePathTracer } from "./hooks/usePathTracer";
 import { TopBar } from "./components/TopBar";
-import { SunPanel } from "./components/SunPanel";
-import { EnergyStatsPanel } from "./components/EnergyStatsPanel";
+import { SceneControls } from "./components/SceneControls";
+import { RightPanel } from "./components/RightPanel";
 import { PathTracerOutput } from "./components/PathTracerOutput";
 import { DEFAULT_TREE_COUNT } from "./constants";
 import { applySunSettings, DEFAULT_SUN } from "./sun";
@@ -34,7 +34,6 @@ export default function PathTracerSandbox() {
   const [, setSelectedName] = useState<string | null>(null);
   const [treeCount, setTreeCount] = useState(DEFAULT_TREE_COUNT);
   const [sun, setSun] = useState<SunSettings>(DEFAULT_SUN);
-  const [sunPanelOpen, setSunPanelOpen] = useState(true);
   // Sphere/Cube/Pyramid geometry now loads from .obj files asynchronously,
   // so the scene isn't ready the instant these hooks are called — see
   // useThreeScene's onReady callback and useCameraMode's sceneReady param.
@@ -104,32 +103,52 @@ export default function PathTracerSandbox() {
   useKeyboardShortcuts(isTracing, sceneRef, setTransformMode, setSelectedName);
 
   return (
-    <div className="relative w-full h-full flex-1">
-      {/* Three.js Canvas Mount */}
-      <div ref={containerRef} className="absolute inset-0" />
+    <div className="w-full h-full flex-1 flex flex-col">
+      <TopBar />
 
-      <TopBar isTracing={isTracing} onRunTracer={handleRunTracer} />
+      <div
+        className="flex-1 grid min-h-0"
+        style={{ gridTemplateColumns: "260px 1fr 280px" }}
+      >
+        {/* Left — scene controls */}
+        <aside
+          className="overflow-y-auto p-4 border-r border-white/10"
+          style={{ background: "rgba(18, 18, 26, 0.9)" }}
+        >
+          <SceneControls
+            sun={sun}
+            onChange={setSun}
+            treeCount={treeCount}
+            onTreeCountChange={handleTreeCountChange}
+            disabled={isTracing}
+          />
+        </aside>
 
-      {!isTracing && (
-        <SunPanel
-          sun={sun}
-          open={sunPanelOpen}
-          onToggle={() => setSunPanelOpen((o) => !o)}
-          onChange={setSun}
-          treeCount={treeCount}
-          onTreeCountChange={handleTreeCountChange}
-        />
-      )}
+        {/* Center — 3D viewport */}
+        <div className="relative">
+          <div ref={containerRef} className="absolute inset-0" />
+          <PathTracerOutput
+            canvasRef={outputCanvasRef}
+            isTracing={isTracing}
+            isInitializing={isInitializing}
+            error={error}
+          />
+        </div>
 
-      {isTracing && !isInitializing && !error && <EnergyStatsPanel />}
-
-      <PathTracerOutput
-        canvasRef={outputCanvasRef}
-        isTracing={isTracing}
-        isInitializing={isInitializing}
-        error={error}
-        onStop={handleStopTracer}
-      />
+        {/* Right — render control + energy readout */}
+        <aside
+          className="overflow-y-auto p-4 border-l border-white/10"
+          style={{ background: "rgba(18, 18, 26, 0.9)" }}
+        >
+          <RightPanel
+            isTracing={isTracing}
+            isInitializing={isInitializing}
+            error={error}
+            onRunTracer={handleRunTracer}
+            onStop={handleStopTracer}
+          />
+        </aside>
+      </div>
     </div>
   );
 }
