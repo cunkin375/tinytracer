@@ -58,15 +58,28 @@ export function RightPanel({
           <h2 className="text-[10px] font-semibold tracking-wide uppercase text-white/40 mb-3">
             Instructions
           </h2>
-          <ol className="list-decimal list-inside text-[12px] text-white/50 leading-relaxed space-y-1.5">
-            <li>Use the mouse button to navigate the scene.</li>
-            <li>Select the Solar Panel and experiment with positioning.</li>
-            <li>Edit world stats to test different conditions.</li>
+          <ol className="list-decimal list-inside text-[12px] text-white/50 leading-relaxed space-y-2">
             <li>
-              Click "Run Path Tracer" above to render the scene and test your
-              Panel placement.
+              <span className="text-white/70 font-medium">Look around</span> —
+              drag with the mouse to orbit the scene.
             </li>
-            <li>Energy stats for the render will appear here.</li>
+            <li>
+              <span className="text-white/70 font-medium">Place the panel</span>{" "}
+              — select the solar panel and move it to a spot you like.
+            </li>
+            <li>
+              <span className="text-white/70 font-medium">Set the conditions</span>{" "}
+              — adjust the world stats to match what you want to test.
+            </li>
+            <li>
+              <span className="text-white/70 font-medium">Run the simulation</span>{" "}
+              — hit "Run Path Tracer" above to render the scene.
+            </li>
+            <li>
+              <span className="text-white/70 font-medium">Check the results</span>{" "}
+              — your panel's energy stats will appear here once the render
+              finishes.
+            </li>
           </ol>
         </div>
       ) : (
