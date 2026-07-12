@@ -1,20 +1,26 @@
+import { MAX_TREE_COUNT } from "../constants";
 import type { SunSettings } from "../types";
 
 /**
- * Floating control panel for the scene's sun (directional light). Adjusts the
- * direction (azimuth / elevation), colour, and intensity that both the WebGL
- * preview and the path tracer read. Collapsed to a single button until opened.
+ * Floating control panel for the scene. Adjusts the sun (direction, colour,
+ * intensity) that both the WebGL preview and the path tracer read, plus tree
+ * density — the other piece of scene control the main app exposes (see
+ * useThreeScene.ts). Collapsed to a single button until opened.
  */
 export function SunPanel({
   sun,
   open,
   onToggle,
   onChange,
+  treeCount,
+  onTreeCountChange,
 }: {
   sun: SunSettings;
   open: boolean;
   onToggle: () => void;
   onChange: (next: SunSettings) => void;
+  treeCount: number;
+  onTreeCountChange: (count: number) => void;
 }) {
   const panelStyle = {
     background: "rgba(18, 18, 26, 0.85)",
@@ -40,7 +46,7 @@ export function SunPanel({
             <div className="flex items-center gap-2 text-white/90">
               <SunIcon />
               <span className="text-xs font-semibold tracking-wide uppercase">
-                Sun
+                Scene Settings
               </span>
             </div>
             <button
@@ -88,6 +94,17 @@ export function SunPanel({
               className="w-8 h-6 rounded cursor-pointer bg-transparent border border-white/15"
             />
           </label>
+
+          <div className="border-t border-white/10 pt-3">
+            <Slider
+              label="Trees"
+              value={treeCount}
+              min={0}
+              max={MAX_TREE_COUNT}
+              step={1}
+              onChange={onTreeCountChange}
+            />
+          </div>
         </div>
       )}
     </div>

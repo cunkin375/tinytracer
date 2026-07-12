@@ -16,7 +16,6 @@ import { TopBar } from "./components/TopBar";
 import { SunPanel } from "./components/SunPanel";
 import { EnergyStatsPanel } from "./components/EnergyStatsPanel";
 import { PathTracerOutput } from "./components/PathTracerOutput";
-import { ScenePanel } from "./components/ScenePanel";
 import { DEFAULT_TREE_COUNT } from "./constants";
 import { applySunSettings, DEFAULT_SUN } from "./sun";
 import "./PathTracerSandbox.css";
@@ -35,7 +34,7 @@ export default function PathTracerSandbox() {
   const [, setSelectedName] = useState<string | null>(null);
   const [treeCount, setTreeCount] = useState(DEFAULT_TREE_COUNT);
   const [sun, setSun] = useState<SunSettings>(DEFAULT_SUN);
-  const [sunPanelOpen, setSunPanelOpen] = useState(false);
+  const [sunPanelOpen, setSunPanelOpen] = useState(true);
   // Sphere/Cube/Pyramid geometry now loads from .obj files asynchronously,
   // so the scene isn't ready the instant these hooks are called — see
   // useThreeScene's onReady callback and useCameraMode's sceneReady param.
@@ -117,15 +116,12 @@ export default function PathTracerSandbox() {
           open={sunPanelOpen}
           onToggle={() => setSunPanelOpen((o) => !o)}
           onChange={setSun}
+          treeCount={treeCount}
+          onTreeCountChange={handleTreeCountChange}
         />
       )}
 
       {isTracing && !isInitializing && !error && <EnergyStatsPanel />}
-
-      <ScenePanel
-        treeCount={treeCount}
-        onTreeCountChange={handleTreeCountChange}
-      />
 
       <PathTracerOutput
         canvasRef={outputCanvasRef}
