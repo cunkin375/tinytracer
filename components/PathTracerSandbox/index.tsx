@@ -34,6 +34,11 @@ export default function PathTracerSandbox() {
   const [, setSelectedName] = useState<string | null>(null);
   const [treeCount, setTreeCount] = useState(DEFAULT_TREE_COUNT);
   const [sun, setSun] = useState<SunSettings>(DEFAULT_SUN);
+  // Off-canvas drawer state for the left/right panels below the `sm`
+  // breakpoint — both panels are always visible at `sm` and up (see the
+  // `sm:static sm:translate-x-0` overrides in the JSX below).
+  const [leftPanelOpen, setLeftPanelOpen] = useState(false);
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
   // Sphere/Cube/Pyramid geometry now loads from .obj files asynchronously,
   // so the scene isn't ready the instant these hooks are called — see
   // useThreeScene's onReady callback and useCameraMode's sceneReady param.
@@ -79,6 +84,11 @@ export default function PathTracerSandbox() {
     if (refs.selectedObject) refs.selectedObject = null;
     setSelectedName(null);
 
+    // On mobile, both panels are off-canvas drawers — close them so the
+    // result is actually visible instead of hidden behind an open drawer.
+    setLeftPanelOpen(false);
+    setRightPanelOpen(false);
+
     await runTracer(refs.scene, refs.perspCamera);
   }, [cameraMode, runTracer]);
 
@@ -104,16 +114,31 @@ export default function PathTracerSandbox() {
 
   return (
     <div className="w-full h-full flex-1 flex flex-col">
-      <TopBar />
+      <TopBar
+        onToggleLeft={() => setLeftPanelOpen((o) => !o)}
+        onToggleRight={() => setRightPanelOpen((o) => !o)}
+      />
 
-      <div
-        className="flex-1 grid min-h-0"
-        style={{ gridTemplateColumns: "260px 1fr 280px" }}
-      >
-        {/* Left — scene controls */}
+      <div className="flex-1 flex min-h-0 relative overflow-hidden">
+        {/* Backdrop — closes whichever drawer is open on mobile. */}
+        {(leftPanelOpen || rightPanelOpen) && (
+          <div
+            className="sm:hidden absolute inset-0 z-[60] bg-black/50"
+            onClick={() => {
+              setLeftPanelOpen(false);
+              setRightPanelOpen(false);
+            }}
+          />
+        )}
+
+        {/* Left — scene controls. Off-canvas drawer below `sm`, static
+            sidebar at `sm` and up. */}
         <aside
-          className="overflow-y-auto p-4 border-r border-white/10"
-          style={{ background: "rgba(18, 18, 26, 0.9)" }}
+          className={`absolute sm:static inset-y-0 left-0 z-[70] w-64 sm:w-[260px] shrink-0
+            overflow-y-auto p-4 border-r border-white/10
+            transition-transform duration-200 sm:translate-x-0
+            ${leftPanelOpen ? "translate-x-0" : "-translate-x-full"}`}
+          style={{ background: "rgba(18, 18, 26, 0.95)" }}
         >
           <SceneControls
             sun={sun}
@@ -125,7 +150,7 @@ export default function PathTracerSandbox() {
         </aside>
 
         {/* Center — 3D viewport */}
-        <div className="relative">
+        <div className="relative flex-1 min-w-0">
           <div ref={containerRef} className="absolute inset-0" />
           <PathTracerOutput
             canvasRef={outputCanvasRef}
@@ -135,10 +160,14 @@ export default function PathTracerSandbox() {
           />
         </div>
 
-        {/* Right — render control + energy readout */}
+        {/* Right — render control + energy readout. Off-canvas drawer below
+            `sm`, static sidebar at `sm` and up. */}
         <aside
-          className="overflow-y-auto p-4 border-l border-white/10"
-          style={{ background: "rgba(18, 18, 26, 0.9)" }}
+          className={`absolute sm:static inset-y-0 right-0 z-[70] w-64 sm:w-[280px] shrink-0
+            overflow-y-auto p-4 border-l border-white/10
+            transition-transform duration-200 sm:translate-x-0
+            ${rightPanelOpen ? "translate-x-0" : "translate-x-full"}`}
+          style={{ background: "rgba(18, 18, 26, 0.95)" }}
         >
           <RightPanel
             isTracing={isTracing}
