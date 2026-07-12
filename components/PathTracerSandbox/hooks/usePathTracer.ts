@@ -11,6 +11,7 @@ import {
   serializeSun,
   serializeTriangles,
 } from "@/lib/webgpu/serializer";
+import { computeEnergyStats, type EnergyStats } from "@/lib/energy";
 import { preloadSkyboxTexture } from "../objects/Skybox";
 
 /** Cap the device-pixel-ratio so the compute pass stays affordable. */
@@ -25,6 +26,8 @@ export interface PathTracerControls {
   isInitializing: boolean;
   /** Non-null when initialization or dispatch failed. */
   error: string | null;
+  /** Energy readout derived from the panel's ray-hit stats; null until a trace completes. */
+  energyStats: EnergyStats | null;
   /** Serialize the scene + perspective camera and run one compute dispatch. */
   runTracer: (scene: THREE.Scene, camera: THREE.PerspectiveCamera) => Promise<void>;
   /** Hide the overlay and return to the sandbox. */
@@ -48,6 +51,7 @@ export function usePathTracer(
   const [isTracing, setIsTracing] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [energyStats, setEnergyStats] = useState<EnergyStats | null>(null);
 
   const runTracer = useCallback(
     async (scene: THREE.Scene, camera: THREE.PerspectiveCamera) => {
@@ -92,7 +96,9 @@ export function usePathTracer(
         tracer.updateScene(triangleData, triangleCount, sphereData, sphereCount, bvhData, bvhNodeCount, sunData);
 
         const cameraData = serializeCamera(camera);
-        tracer.dispatchCompute(cameraData, 1, triangleCount, sphereCount);
+        const panelStats = await tracer.dispatchCompute(cameraData, 1, triangleCount, sphereCount);
+        // sunData[7] is the SunLight uniform's intensity float (see serializeSun).
+        setEnergyStats(computeEnergyStats(panelStats, sunData[7]));
 
         setIsTracing(true);
       } catch (err) {
@@ -106,6 +112,7 @@ export function usePathTracer(
 
   const stopTracer = useCallback(() => {
     setIsTracing(false);
+    setEnergyStats(null);
     setError(null);
   }, []);
 
@@ -122,6 +129,7 @@ export function usePathTracer(
     isTracing,
     isInitializing,
     error,
+    energyStats,
     runTracer,
     stopTracer,
   };

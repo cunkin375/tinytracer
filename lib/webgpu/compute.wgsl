@@ -62,7 +62,7 @@ struct Triangle {
     _p2:             f32,
     // xyz = albedo,  w = roughness
     albedo_roughness: vec4<f32>,
-    // x = material type, y = IOR, z/w = padding
+    // x = material type, y = IOR, z = is_panel_top flag (1.0/0.0), w = padding
     mat_data:        vec4<f32>,
 }
 
@@ -99,6 +99,9 @@ struct HitRecord {
     roughness:  f32,
     mat_type:   u32,
     ior:        f32,
+    // True when this hit landed on the solar panel's flat top face (see
+    // `serializeTriangles`'s local-normal tagging). Always false for spheres.
+    is_panel_top: bool,
 }
 
 // ── Bindings ────────────────────────────────────────────────────────────────
@@ -112,6 +115,13 @@ struct HitRecord {
 @group(0) @binding(6) var skybox_texture: texture_2d<f32>;
 @group(0) @binding(7) var skybox_sampler: sampler;
 @group(0) @binding(8) var<uniform> sun: SunLight;
+// Solar-panel ray-hit statistics, accumulated across every bounce of every
+// pixel in the dispatch and read back to the CPU afterwards (see
+// `WebGPUPathTracer.dispatchCompute`). Cleared to zero before each dispatch.
+//   [0] = total rays whose closest hit was the panel's top face
+//   [1] = subset of those where the sun is above the horizon and unoccluded
+//   [2] = sum of round(cos_theta * COS_SCALE) over the [1] hits
+@group(0) @binding(9) var<storage, read_write> panel_stats: array<atomic<u32>, 3>;
 
 // ── RNG: PCG Hash ───────────────────────────────────────────────────────────
 
@@ -257,6 +267,7 @@ fn hit_sphere(r: Ray, sphere: Sphere, t_min: f32, t_max: f32, rec: ptr<function,
     (*rec).roughness = sphere.albedo_roughness.w;
     (*rec).mat_type  = u32(sphere.mat_data.x);
     (*rec).ior       = sphere.mat_data.y;
+    (*rec).is_panel_top = false;
 
     return true;
 }
@@ -303,6 +314,7 @@ fn hit_triangle(r: Ray, tri: Triangle, t_min: f32, t_max: f32, rec: ptr<function
     (*rec).roughness = tri.albedo_roughness.w;
     (*rec).mat_type  = u32(tri.mat_data.x);
     (*rec).ior       = tri.mat_data.y;
+    (*rec).is_panel_top = tri.mat_data.z > 0.5;
 
     return true;
 }
@@ -521,6 +533,45 @@ fn sky_color(r: Ray) -> vec3<f32> {
 
 // ── Direct Lighting (Sun / Next Event Estimation) ─────────────────────────────
 
+struct SunVisibility {
+    // dot(normal, direction-to-sun), meaningful only when `visible` is true.
+    cos_theta: f32,
+    // True when the sun is above the surface's horizon *and* unoccluded.
+    visible:   bool,
+}
+
+/// Shared sun-exposure test used both for next-event-estimation shading
+/// (`sun_direct_light`) and for the solar-panel irradiance statistics in
+/// `trace()`, so the two stay in lock-step by construction.
+fn sun_visibility(rec: HitRecord) -> SunVisibility {
+    var result: SunVisibility;
+    result.cos_theta = 0.0;
+    result.visible = false;
+
+    if sun.intensity <= 0.0 {
+        return result;
+    }
+
+    let to_sun = normalize(sun.direction);
+    let cos_theta = dot(rec.normal, to_sun);
+    if cos_theta <= 0.0 {
+        // Sun is below the surface's horizon — no direct light.
+        return result;
+    }
+    result.cos_theta = cos_theta;
+
+    // Offset the origin along the normal to avoid shadow acne (self-shadowing
+    // caused by the point sitting fractionally inside the surface).
+    let shadow_origin = rec.p + rec.normal * EPSILON;
+    let shadow_ray = Ray(shadow_origin, to_sun);
+    if is_occluded(shadow_ray, EPSILON, MAX_FLOAT) {
+        return result;
+    }
+
+    result.visible = true;
+    return result;
+}
+
 /// Direct contribution of the sun at a diffuse hit point, evaluated by casting
 /// a single shadow ray toward the (infinitely distant) directional light.
 /// Returns the outgoing radiance to add to the path, or zero if the sun is
@@ -531,31 +582,24 @@ fn sky_color(r: Ray) -> vec3<f32> {
 /// Only the Lambertian BRDF (albedo / π) is handled — specular/dielectric
 /// materials have a delta BRDF that a directional light almost never satisfies.
 fn sun_direct_light(rec: HitRecord) -> vec3<f32> {
-    if sun.intensity <= 0.0 {
-        return vec3<f32>(0.0);
-    }
-
-    let to_sun = normalize(sun.direction);
-    let cos_theta = dot(rec.normal, to_sun);
-    if cos_theta <= 0.0 {
-        // Sun is below the surface's horizon — no direct light.
-        return vec3<f32>(0.0);
-    }
-
-    // Offset the origin along the normal to avoid shadow acne (self-shadowing
-    // caused by the point sitting fractionally inside the surface).
-    let shadow_origin = rec.p + rec.normal * EPSILON;
-    let shadow_ray = Ray(shadow_origin, to_sun);
-    if is_occluded(shadow_ray, EPSILON, MAX_FLOAT) {
+    let vis = sun_visibility(rec);
+    if !vis.visible {
         return vec3<f32>(0.0);
     }
 
     // Lambertian BRDF = albedo / π; sun.intensity is treated as irradiance.
     let brdf = rec.albedo / PI;
-    return brdf * sun.color * sun.intensity * cos_theta;
+    return brdf * sun.color * sun.intensity * vis.cos_theta;
 }
 
 // ── Path Tracing ────────────────────────────────────────────────────────────
+
+// Fixed-point scale for panel_stats[2] (a quantized sum of cos_theta values):
+// atomics are integer-only, so each lit hit contributes round(cos_theta *
+// COS_SCALE) instead of a float. Kept small so the running sum can't overflow
+// u32 even if every bounce of every sample in a large dispatch lands on the
+// panel (worst case ~a few hundred million hits — see dispatchCompute).
+const COS_SCALE: f32 = 10.0;
 
 fn trace(initial_ray: Ray) -> vec3<f32> {
     var radiance    = vec3<f32>(0.0, 0.0, 0.0); // accumulated light
@@ -566,6 +610,18 @@ fn trace(initial_ray: Ray) -> vec3<f32> {
         var rec: HitRecord;
 
         if hit_world(current_ray, EPSILON, MAX_FLOAT, &rec) {
+            // Solar-panel energy readout: every ray whose closest hit lands
+            // on the panel's top face counts toward the stats read back by
+            // the CPU after this dispatch (see RenderState.panel_stats).
+            if rec.is_panel_top {
+                atomicAdd(&panel_stats[0], 1u);
+                let vis = sun_visibility(rec);
+                if vis.visible {
+                    atomicAdd(&panel_stats[1], 1u);
+                    atomicAdd(&panel_stats[2], u32(round(vis.cos_theta * COS_SCALE)));
+                }
+            }
+
             // Next event estimation: add the sun's direct contribution at
             // diffuse surfaces before continuing the random walk.
             if rec.mat_type == MAT_LAMBERTIAN {

@@ -64,6 +64,7 @@ export default function PathTracerSandbox() {
     isTracing,
     isInitializing,
     error,
+    energyStats,
     runTracer,
     stopTracer,
   } = usePathTracer(containerRef);
@@ -173,6 +174,7 @@ export default function PathTracerSandbox() {
             isTracing={isTracing}
             isInitializing={isInitializing}
             error={error}
+            energyStats={energyStats}
             onRunTracer={handleRunTracer}
             onStop={handleStopTracer}
           />

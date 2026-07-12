@@ -1,10 +1,4 @@
-// Placeholder figures — a real reading will eventually come from the traced
-// scene (panel orientation vs. sun position, irradiance, etc.).
-const PLACEHOLDER_STATS = {
-  efficiencyPct: 87,
-  generatedKwhPerDay: 4.2,
-  savedDollarsPerMonth: 18.5,
-};
+import type { EnergyStats } from "@/lib/energy";
 
 /**
  * Right sidebar — the path tracer's render control and, once a trace is
@@ -14,12 +8,14 @@ export function RightPanel({
   isTracing,
   isInitializing,
   error,
+  energyStats,
   onRunTracer,
   onStop,
 }: {
   isTracing: boolean;
   isInitializing: boolean;
   error: string | null;
+  energyStats: EnergyStats | null;
   onRunTracer: () => void;
   onStop: () => void;
 }) {
@@ -88,19 +84,19 @@ export function RightPanel({
             Energy
           </h2>
 
-          {!isInitializing && !error ? (
+          {!isInitializing && !error && energyStats ? (
             <div className="flex flex-col gap-3">
               <Stat
                 label="Energy efficiency"
-                value={`${PLACEHOLDER_STATS.efficiencyPct}%`}
+                value={`${energyStats.efficiencyPct}%`}
               />
               <Stat
                 label="Energy generated"
-                value={`${PLACEHOLDER_STATS.generatedKwhPerDay} kWh/day`}
+                value={`${energyStats.generatedKwhPerDay} kWh/day`}
               />
               <Stat
                 label="Money saved"
-                value={`$${PLACEHOLDER_STATS.savedDollarsPerMonth}/mo`}
+                value={`$${energyStats.savedDollarsPerMonth}/mo`}
               />
             </div>
           ) : (

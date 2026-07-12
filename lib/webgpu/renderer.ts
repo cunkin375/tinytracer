@@ -41,6 +41,29 @@ const BVH_BYTE_STRIDE = 32;
  */
 const SUN_BUFFER_SIZE = 32;
 
+/**
+ * Solar-panel ray-hit statistics: 3 × u32 = 12 bytes, matching the WGSL
+ * `panel_stats: array<atomic<u32>, 3>` storage binding. See {@link PanelStats}.
+ */
+const PANEL_STATS_COUNT = 3;
+const PANEL_STATS_BUFFER_SIZE = PANEL_STATS_COUNT * 4;
+
+/**
+ * Raw solar-panel hit counters read back from the GPU after a dispatch.
+ * `cosThetaSumScaled` is a fixed-point sum (see `COS_SCALE` in compute.wgsl)
+ * — divide by that same scale to recover the average cosine of incidence.
+ */
+export interface PanelStats {
+  /** Rays (across all bounces) whose closest hit was the panel's top face. */
+  totalHits: number;
+  /** Subset of `totalHits` where the sun was above the horizon and unoccluded. */
+  litHits: number;
+  /** Fixed-point sum of `cos_theta * COS_SCALE` over the `litHits` hits. */
+  cosThetaSumScaled: number;
+}
+
+const EMPTY_PANEL_STATS: PanelStats = { totalHits: 0, litHits: 0, cosThetaSumScaled: 0 };
+
 /** Workgroup dimensions — must match @workgroup_size in the shader. */
 const WORKGROUP_X = 16;
 const WORKGROUP_Y = 16;
@@ -67,6 +90,18 @@ export class WebGPUPathTracer {
   private skyboxTexture: GPUTexture;
   private skyboxSampler: GPUSampler;
 
+  // Solar-panel stats: `panelStatsBuffer` is the atomic counter the shader
+  // writes into; `panelStatsReadBuffer` is a persistent MAP_READ-able buffer
+  // it's copied into after each dispatch so the CPU can read it back. Both
+  // are allocated once and reused for every run — never recreated per frame
+  // — so repeated Run/Stop cycles can't leak GPU buffers.
+  private panelStatsBuffer: GPUBuffer;
+  private panelStatsReadBuffer: GPUBuffer;
+  // Serializes access to `panelStatsReadBuffer`'s map/unmap cycle so two
+  // overlapping readPanelStats() calls (e.g. Run clicked again before the
+  // previous readback resolved) can never both have it mapped at once.
+  private statsReadLock: Promise<void> = Promise.resolve();
+
   // Tracking
   private currentTriangleCapacity = 0;
   private currentSphereCapacity = 0;
@@ -85,6 +120,8 @@ export class WebGPUPathTracer {
     cameraBuffer: GPUBuffer,
     stateBuffer: GPUBuffer,
     sunBuffer: GPUBuffer,
+    panelStatsBuffer: GPUBuffer,
+    panelStatsReadBuffer: GPUBuffer,
     skyboxTexture: GPUTexture,
     skyboxSampler: GPUSampler,
     width: number,
@@ -97,6 +134,8 @@ export class WebGPUPathTracer {
     this.cameraBuffer = cameraBuffer;
     this.stateBuffer = stateBuffer;
     this.sunBuffer = sunBuffer;
+    this.panelStatsBuffer = panelStatsBuffer;
+    this.panelStatsReadBuffer = panelStatsReadBuffer;
     this.skyboxTexture = skyboxTexture;
     this.skyboxSampler = skyboxSampler;
     this.width = width;
@@ -217,6 +256,12 @@ export class WebGPUPathTracer {
           visibility: GPUShaderStage.COMPUTE,
           buffer: { type: "uniform" },
         },
+        {
+          // @binding(9): Solar-panel hit-count stats (read_write, atomics)
+          binding: 9,
+          visibility: GPUShaderStage.COMPUTE,
+          buffer: { type: "storage" },
+        },
       ],
     });
 
@@ -254,6 +299,22 @@ export class WebGPUPathTracer {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
+    // Panel stats: the atomic counter buffer the shader writes into, plus a
+    // persistent MAP_READ-able buffer it's copied into for readback. Both
+    // live for the tracer's whole lifetime (see `destroy()`) — never
+    // recreated per dispatch — so repeated runs can't leak GPU memory.
+    const panelStatsBuffer = device.createBuffer({
+      label: "Panel Stats Storage Buffer",
+      size: PANEL_STATS_BUFFER_SIZE,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+    });
+
+    const panelStatsReadBuffer = device.createBuffer({
+      label: "Panel Stats Readback Buffer",
+      size: PANEL_STATS_BUFFER_SIZE,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+
     // ── 7. Upload Skybox Texture ────────────────────────────────────────
     const skyboxTexture = device.createTexture({
       label: "Skybox Texture",
@@ -284,6 +345,8 @@ export class WebGPUPathTracer {
       cameraBuffer,
       stateBuffer,
       sunBuffer,
+      panelStatsBuffer,
+      panelStatsReadBuffer,
       skyboxTexture,
       skyboxSampler,
       width,
@@ -393,19 +456,20 @@ export class WebGPUPathTracer {
   // ── Compute Dispatch ────────────────────────────────────────────────────
 
   /**
-   * Run one compute pass: update uniforms, bind resources, and dispatch
-   * workgroups to cover the full canvas.
+   * Run one compute pass: update uniforms, bind resources, dispatch
+   * workgroups to cover the full canvas, and read back the solar-panel hit
+   * counters the shader accumulated during the pass.
    *
    * @param cameraData  Packed Float32Array from `serializeCamera`.
    * @param frameCount  Current frame number (1-indexed). Used by the shader
    *                    for RNG seeding and progressive accumulation.
    */
-  dispatchCompute(
+  async dispatchCompute(
     cameraData: Float32Array,
     frameCount: number,
     triangleCount: number,
     sphereCount: number
-  ): void {
+  ): Promise<PanelStats> {
     // ── Update camera uniform ─────────────────────────────────────────
     this.device.queue.writeBuffer(
       this.cameraBuffer, 0,
@@ -426,6 +490,14 @@ export class WebGPUPathTracer {
       stateData.buffer, stateData.byteOffset, stateData.byteLength
     );
 
+    // ── Reset the panel-stats counters ────────────────────────────────
+    // Every dispatch starts a fresh accumulation — otherwise counts would
+    // keep growing across runs instead of reflecting this render alone.
+    this.device.queue.writeBuffer(
+      this.panelStatsBuffer, 0,
+      new Uint32Array(PANEL_STATS_COUNT)
+    );
+
     // ── Obtain current canvas texture ─────────────────────────────────
     const texture = this.context.getCurrentTexture();
     const textureView = texture.createView();
@@ -435,7 +507,7 @@ export class WebGPUPathTracer {
     // texture view changes each frame.
     if (!this.triangleBuffer || !this.sphereBuffer) {
       // No scene uploaded yet — nothing to render.
-      return;
+      return EMPTY_PANEL_STATS;
     }
 
     this.bindGroup = this.device.createBindGroup({
@@ -451,6 +523,7 @@ export class WebGPUPathTracer {
         { binding: 6, resource: this.skyboxTexture.createView() },
         { binding: 7, resource: this.skyboxSampler },
         { binding: 8, resource: { buffer: this.sunBuffer } },
+        { binding: 9, resource: { buffer: this.panelStatsBuffer } },
       ],
     });
 
@@ -470,7 +543,48 @@ export class WebGPUPathTracer {
     pass.dispatchWorkgroups(workgroupsX, workgroupsY);
     pass.end();
 
+    // Copy the panel stats into the persistent MAP_READ-able buffer within
+    // the same command buffer — WebGPU guarantees this runs after the
+    // compute pass's atomic writes complete.
+    commandEncoder.copyBufferToBuffer(
+      this.panelStatsBuffer, 0,
+      this.panelStatsReadBuffer, 0,
+      PANEL_STATS_BUFFER_SIZE
+    );
+
     this.device.queue.submit([commandEncoder.finish()]);
+
+    return this.readPanelStats();
+  }
+
+  /**
+   * Map, read, and unmap `panelStatsReadBuffer`. Chained through
+   * `statsReadLock` so overlapping calls (e.g. Run clicked again before a
+   * previous readback finished) never try to map the same buffer twice —
+   * mapAsync throws if the buffer is already mapped, and an unpaired mapAsync
+   * without a matching unmap() would permanently pin that GPU memory.
+   */
+  private readPanelStats(): Promise<PanelStats> {
+    const result = this.statsReadLock.then(async () => {
+      await this.panelStatsReadBuffer.mapAsync(GPUMapMode.READ);
+      try {
+        const data = new Uint32Array(this.panelStatsReadBuffer.getMappedRange().slice(0));
+        return {
+          totalHits: data[0],
+          litHits: data[1],
+          cosThetaSumScaled: data[2],
+        };
+      } finally {
+        this.panelStatsReadBuffer.unmap();
+      }
+    });
+    // Keep the lock chain alive regardless of success/failure, but don't let
+    // a rejection here propagate into unrelated later reads.
+    this.statsReadLock = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
   }
 
   // ── Resize ──────────────────────────────────────────────────────────────
@@ -513,6 +627,8 @@ export class WebGPUPathTracer {
     this.cameraBuffer.destroy();
     this.stateBuffer.destroy();
     this.sunBuffer.destroy();
+    this.panelStatsBuffer.destroy();
+    this.panelStatsReadBuffer.destroy();
     this.triangleBuffer?.destroy();
     this.sphereBuffer?.destroy();
     this.bvhBuffer?.destroy();

@@ -23,9 +23,11 @@ export const FLOATS_PER_SPHERE = 12;
 /**
  * Number of f32 values per Triangle struct. Layout (std430, 80 bytes):
  * ```
- *  0  1  2  3   4  5  6  7   8  9 10 11   12 13 14 15   16  17  18 19
- * v0x v0y v0z _ v1x v1y v1z _ v2x v2y v2z _  ar ag ab rgh  mT ior _  _
+ *  0  1  2  3   4  5  6  7   8  9 10 11   12 13 14 15   16  17   18  19
+ * v0x v0y v0z _ v1x v1y v1z _ v2x v2y v2z _  ar ag ab rgh  mT ior  top _
  * ```
+ * `top` (mat_data.z) is 1.0 for triangles belonging to the solar panel's flat
+ * top face (see `PANEL_TOP_LOCAL_NORMAL` below), 0.0 otherwise.
  */
 export const FLOATS_PER_TRIANGLE = 20;
 
@@ -49,6 +51,7 @@ interface BVHPrimitive {
   v2: THREE.Vector3;
   centroid: THREE.Vector3;
   mat: ReturnType<typeof readMaterial>;
+  isPanelTop: boolean;
 }
 
 interface BVHNode {
@@ -191,10 +194,26 @@ export function serializeSpheres(scene: THREE.Scene): Float32Array {
 
 // ── Triangle Serialization ────────────────────────────────────────────────────
 
-/** Reusable scratch to avoid per-vertex allocations. */
-const _v0 = new THREE.Vector3();
-const _v1 = new THREE.Vector3();
-const _v2 = new THREE.Vector3();
+/** Reusable scratch for local-space panel-top face detection (see below). */
+const _localV0 = new THREE.Vector3();
+const _localV1 = new THREE.Vector3();
+const _localV2 = new THREE.Vector3();
+const _localEdge1 = new THREE.Vector3();
+const _localEdge2 = new THREE.Vector3();
+const _localNormal = new THREE.Vector3();
+
+/**
+ * The solar panel mesh (see `useThreeScene.ts`'s surface-lock) always keeps
+ * its local +Y pointing "up" — outward from the Earth — regardless of where
+ * it's dragged on the globe. So a triangle whose *local-space* (pre-world-
+ * transform) face normal matches local +Y is, geometrically, always part of
+ * the panel's flat top face, no matter the panel's current world position or
+ * rotation. Confirmed against the source mesh: exactly 10 of its 60
+ * triangles have an exact (0,1,0) local normal (the raised "cell" grid top),
+ * distinct from the frame's side/bottom faces.
+ */
+const PANEL_TOP_LOCAL_NORMAL = new THREE.Vector3(0, 1, 0);
+const PANEL_TOP_NORMAL_THRESHOLD = 0.9;
 
 /**
  * Walk the scene graph and pack every triangle-traceable mesh (boxes, cones)
@@ -222,6 +241,7 @@ export function serializeTriangles(scene: THREE.Scene): { triangleData: Float32A
     const geometry = mesh.geometry;
     const mat = readMaterial(mesh);
     const world = mesh.matrixWorld;
+    const isPanelMesh = mesh.userData.isSolarPanel === true;
 
     const position = geometry.attributes.position as THREE.BufferAttribute;
     const colorAttr = geometry.attributes.color as THREE.BufferAttribute | undefined;
@@ -236,7 +256,7 @@ export function serializeTriangles(scene: THREE.Scene): { triangleData: Float32A
       const v0 = new THREE.Vector3().fromBufferAttribute(position, i0).applyMatrix4(world);
       const v1 = new THREE.Vector3().fromBufferAttribute(position, i1).applyMatrix4(world);
       const v2 = new THREE.Vector3().fromBufferAttribute(position, i2).applyMatrix4(world);
-      
+
       const centroid = new THREE.Vector3().add(v0).add(v1).add(v2).multiplyScalar(1 / 3);
 
       let triMat = mat;
@@ -244,7 +264,7 @@ export function serializeTriangles(scene: THREE.Scene): { triangleData: Float32A
         const c0 = new THREE.Color().fromBufferAttribute(colorAttr, i0);
         const c1 = new THREE.Color().fromBufferAttribute(colorAttr, i1);
         const c2 = new THREE.Color().fromBufferAttribute(colorAttr, i2);
-        
+
         triMat = {
           ...mat,
           r: mat.r * (c0.r + c1.r + c2.r) / 3,
@@ -253,7 +273,21 @@ export function serializeTriangles(scene: THREE.Scene): { triangleData: Float32A
         };
       }
 
-      primitives.push({ v0, v1, v2, centroid, mat: triMat });
+      // Tag triangles on the solar panel's flat top face — see
+      // PANEL_TOP_LOCAL_NORMAL. Tested in local (pre-world-transform) space
+      // so it holds regardless of where the panel is currently placed.
+      let isPanelTop = false;
+      if (isPanelMesh) {
+        _localV0.fromBufferAttribute(position, i0);
+        _localV1.fromBufferAttribute(position, i1);
+        _localV2.fromBufferAttribute(position, i2);
+        _localEdge1.subVectors(_localV1, _localV0);
+        _localEdge2.subVectors(_localV2, _localV0);
+        _localNormal.crossVectors(_localEdge1, _localEdge2).normalize();
+        isPanelTop = _localNormal.dot(PANEL_TOP_LOCAL_NORMAL) > PANEL_TOP_NORMAL_THRESHOLD;
+      }
+
+      primitives.push({ v0, v1, v2, centroid, mat: triMat, isPanelTop });
     }
   }
 
@@ -386,7 +420,7 @@ export function serializeTriangles(scene: THREE.Scene): { triangleData: Float32A
 
     triangleData[offset + 16] = p.mat.matType;
     triangleData[offset + 17] = p.mat.ior;
-    triangleData[offset + 18] = 0;
+    triangleData[offset + 18] = p.isPanelTop ? 1 : 0;
     triangleData[offset + 19] = 0;
     offset += FLOATS_PER_TRIANGLE;
   }
