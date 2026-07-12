@@ -57,6 +57,7 @@
   }
 
   .main {
+    position: relative;
     display: grid;
     grid-template-columns: 220px 1fr 280px;
     height: calc(100vh - 49px);
@@ -69,6 +70,27 @@
   }
   aside.palette { border-right: 1px solid var(--border); }
   aside.inspector { border-left: 1px solid var(--border); }
+
+  /* Mobile-only off-canvas drawer toggles — hidden at desktop widths, shown
+     via the media query below (mirrors TopBar.tsx's `sm:hidden` buttons). */
+  .menu-toggle {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    flex-shrink: 0;
+  }
+  .menu-toggle svg { width: 18px; height: 18px; }
+
+  .drawer-backdrop {
+    display: none;
+    position: absolute;
+    inset: 0;
+    z-index: 60;
+    background: rgba(0, 0, 0, 0.5);
+  }
 
   h2 {
     font-size: 10px;
@@ -219,11 +241,44 @@
   }
   .code-block code { font-family: ui-monospace, "SF Mono", Menlo, monospace; white-space: pre; }
   .dialog-close { display: block; margin: 4px 0 0 auto; }
+
+  /* Below this width the palette/inspector become off-canvas drawers instead
+     of grid columns — same 640px cutoff and drawer treatment used for the
+     forest scene's SceneControls/RightPanel (see index.tsx, TopBar.tsx). */
+  @media (max-width: 639px) {
+    header { flex-wrap: wrap; row-gap: 8px; padding: 10px 12px; gap: 10px; }
+    header p { display: none; }
+    header input[type="text"] { width: 110px; }
+    .menu-toggle { display: inline-flex; }
+
+    .main { grid-template-columns: 1fr; }
+
+    aside.palette, aside.inspector {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      z-index: 70;
+      width: 260px;
+      max-width: 82vw;
+      transition: transform 0.2s;
+    }
+    aside.palette { left: 0; transform: translateX(-100%); }
+    aside.inspector { right: 0; transform: translateX(100%); }
+    aside.palette.open, aside.inspector.open { transform: translateX(0); }
+
+    .drawer-backdrop.visible { display: block; }
+  }
 </style>
 </head>
 <body>
 
 <header>
+  <button class="menu-toggle" id="menu-toggle-left" aria-label="Toggle shape palette" title="Shapes">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+      <path d="M3 6h18M3 12h18M3 18h18" />
+    </svg>
+  </button>
+
   <a class="brand-btn" href="/">
     <span class="brand-name">tiny tracer</span>
     <span class="brand-label">shape editor</span>
@@ -234,9 +289,17 @@
     <input type="text" id="model-name" placeholder="Snowman" value="CustomModel" />
   </label>
   <button class="primary-btn" id="export-btn">Export →</button>
+
+  <button class="menu-toggle" id="menu-toggle-right" aria-label="Toggle inspector" title="Inspector">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z" />
+    </svg>
+  </button>
 </header>
 
 <div class="main">
+  <div class="drawer-backdrop" id="drawer-backdrop"></div>
+
   <aside class="palette">
     <h2>Add Shape</h2>
     <button class="add-btn" data-type="Sphere">
@@ -1078,6 +1141,15 @@ function selectShape(id, additive) {
   attachTransformControls();
   renderShapeList();
   renderInspector();
+
+  // On mobile the inspector is an off-canvas drawer (closed by default), so
+  // selecting a shape would otherwise leave its properties invisible until
+  // the user manually opens it. Swap the palette for the inspector instead.
+  if (id !== null && window.innerWidth < MOBILE_BREAKPOINT) {
+    paletteEl.classList.remove("open");
+    inspectorEl.classList.add("open");
+    updateDrawerBackdrop();
+  }
 }
 
 // ─── Shape list panel ────────────────────────────────────────────────────
@@ -1123,6 +1195,34 @@ function renderShapeList() {
 // ─── Inspector panel ─────────────────────────────────────────────────────
 
 const inspectorEl = document.getElementById("inspector");
+
+// ─── Mobile off-canvas drawers ──────────────────────────────────────────
+// Below 640px the palette/inspector asides become slide-in drawers (see the
+// @media block above) instead of grid columns — same treatment as the
+// forest scene's SceneControls/RightPanel (index.tsx, TopBar.tsx).
+
+const paletteEl = document.querySelector("aside.palette");
+const drawerBackdropEl = document.getElementById("drawer-backdrop");
+const MOBILE_BREAKPOINT = 640;
+
+function updateDrawerBackdrop() {
+  const anyOpen = paletteEl.classList.contains("open") || inspectorEl.classList.contains("open");
+  drawerBackdropEl.classList.toggle("visible", anyOpen);
+}
+function closeDrawers() {
+  paletteEl.classList.remove("open");
+  inspectorEl.classList.remove("open");
+  drawerBackdropEl.classList.remove("visible");
+}
+document.getElementById("menu-toggle-left").addEventListener("click", () => {
+  paletteEl.classList.toggle("open");
+  updateDrawerBackdrop();
+});
+document.getElementById("menu-toggle-right").addEventListener("click", () => {
+  inspectorEl.classList.toggle("open");
+  updateDrawerBackdrop();
+});
+drawerBackdropEl.addEventListener("click", closeDrawers);
 
 function numberField(labelText, value, step, min, onChange) {
   const wrap = document.createElement("div");
