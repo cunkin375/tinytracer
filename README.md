@@ -1,36 +1,80 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TinyTracer
 
-## Getting Started
+## Requirements
 
-First, run the development server:
+- **Node.js** 20+ and npm
+- **WebGPU-capable browser** (see below) - this project has no WebGL/CPU fallback for its path-tracer.
+
+## Getting started
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Other scripts:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build   # production build
+npm run start   # serve the production build
+npm run lint    # eslint
+```
 
-## Learn More
+## Browser support
 
-To learn more about Next.js, take a look at the following resources:
+The path tracer dispatches a WebGPU compute shader ([`lib/webgpu/compute.wgsl`](lib/webgpu/compute.wgsl)) and requires an engine with a working `navigator.gpu`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Known-good:
+- **Chrome / Edge 113+** on Windows, macOS, ChromeOS, and Android — the primary supported target.
+- Chromium-based browsers with WebGPU explicitly enabled.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Partial-support:
+- **Safari** — WebGPU shipped by default starting with Safari 18 (macOS Sequoia / iOS 18).
+- **Firefox** — WebGPU support has been rolling out per-platform in recent nightly releases.
 
-## Deploy on Vercel
+Only the path-acer needs WebGPU support. The rest of the project runs by using Three.js's WebGL renderer.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Codebase structure
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+app/
+  page.tsx              Landing page (links to the sandbox and the shape editor)
+  sandbox/page.tsx       Route that lazy-loads the sandbox (SSR disabled — Three.js needs the DOM)
+  layout.tsx, globals.css
+
+components/
+  BrandButton.tsx, DayNightBackground.tsx   Landing page UI
+  PathTracerSandbox/                        The scene editor + path tracer UI
+    index.tsx                Top-level layout: left/right panels, viewport, wiring
+    components/               TopBar, SceneControls, RightPanel, PathTracerOutput
+    hooks/
+      useThreeScene.ts         Builds the Three.js scene, camera, lights, loads models
+      useCameraMode.ts         Perspective/orthographic camera switching
+      useKeyboardShortcuts.ts  Hotkeys for transform modes, etc.
+      usePathTracer.ts         Serializes the scene and drives the WebGPU renderer
+    objects/                   Scene primitives (Cube, Sphere, Pyramid, Skybox, terrain, geometry loading)
+    sun.ts, constants.ts, types.ts
+
+lib/
+  energy.ts                 Solar-panel hit-rate / energy statistics helpers
+  webgpu/
+    renderer.ts              WebGPU device/pipeline/buffer lifecycle (WebGPUPathTracer)
+    serializer.ts             Converts the Three.js scene graph into GPU buffer layouts (triangles, BVH, spheres)
+    compute.wgsl              The path tracing compute shader
+
+public/
+  models/                   .obj meshes used by the sandbox (Car, Tree, SolarPannel, cube, pyramid, sphere)
+  shape-editor.html          Standalone "Create Your Own" shape editor, linked from the landing page
+  skybox-texture.png
+```
+
+## Dependencies
+
+- **[Next.js](https://nextjs.org) 16** (Turbopack by default)
+- **React 19 / React DOM 19**
+- **[three](https://threejs.org)** - scene graph, WebGL preview, camera/orbit/transform controls, `.obj` loading
+- **`@webgpu/types`** - TypeScript types for the WebGPU API (dev dependency)
+- **`raw-loader`** - imports `.wgsl` shader source as a raw string; wired up in [`next.config.ts`](next.config.ts) for both Turbopack and the webpack fallback build
+- **Tailwind CSS 4** - styling
